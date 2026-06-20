@@ -1,0 +1,137 @@
+# ============================================================================
+# Configuration file
+#
+# Copy this file to:
+#   config.yaml
+#
+# Then edit the values below before running either script.
+# ============================================================================
+
+# Qualtrics survey link that participants will receive.
+# send_survey_emails.py appends ?cid=<response_id> per participant.
+survey_link: "https://your-survey-url-here"
+
+sender:
+  # Name shown in email signatures.
+  name: "Your Name"
+
+  # Title shown in email signatures.
+  title: "Research Assistant"
+
+  # Contact email displayed in messages.
+  contact_email: "research@example.edu"
+
+# Optional shared mailbox used as the sender.
+#
+# Leave empty ("") to send from the logged-in account.
+shared_mailbox: ""
+
+age_limits:
+  # Minimum eligible age.
+  min: 13
+
+  # Maximum eligible age.
+  max: 18
+
+paths:
+  # Folder where Qualtrics ZIP exports are dropped (shared by both scripts).
+  inbox_dir: "ingest"
+
+  # Master participant tracking workbook (inside data/ subfolder).
+  tracker_file: "data/participant_tracker_auto.xlsx"
+
+  # CSV log of sent invitation emails (inside data/ subfolder).
+  send_log_file: "data/send_log.csv"
+
+  # CSV audit log of sent reminder emails (inside data/ subfolder).
+  reminder_log_file: "data/reminder_log.csv"
+
+# --------------------------------------------------------------------------
+# Qualtrics field labels for the CONSENT / SCREENER survey
+#
+# These must exactly match the column headers in your consent survey export.
+# Used by send_survey_emails.py.
+# --------------------------------------------------------------------------
+
+qualtrics_fields:
+  response_id: "Response ID"
+  recorded_date: "Recorded Date"
+  finished: "Finished"
+
+  parent_name: "Parent/Guardian Full Name"
+  child_name: "Child Participant's Full Name"
+
+  parent_consent: "Parent consent question text here"
+
+  parent_signature: |
+    Typed signature - Parent
+
+    Please type your full name as your electronic signature
+
+  child_assent: "Child assent question text here"
+
+  child_signature: |
+    Typed signature - Child
+
+    Please type your full name as your electronic signature
+
+  delivery_email: |
+    Email collection question text here
+
+  dob: |
+    Date of birth question text here
+
+# Responses accepted as valid consent (compared after lowercasing).
+consent_ok:
+  - "i consent"
+
+# Responses accepted as valid assent (compared after lowercasing).
+assent_ok:
+  - "yes, i want to be in the study"
+
+# --------------------------------------------------------------------------
+# Response management settings
+# Used by manage_responses.py.
+# --------------------------------------------------------------------------
+
+# All entries (consent or response survey) recorded before this date are
+# ignored by manage_responses.py. Format: YYYY-MM-DD.
+response_cutoff_date: "2026-06-09"
+
+# Days after the initial invitation email before each follow-up reminder fires.
+reminder_intervals:
+  follow_up_1_days: 3
+  follow_up_2_days: 5
+
+# Column headers in the RESPONSE SURVEY Qualtrics export (the teen survey).
+# These are separate from qualtrics_fields above (which is for the consent survey).
+#
+# cid: embedded-data field that captures the ?cid= URL parameter set in each
+# invitation link. Must match exactly whatever you named the embedded-data
+# field in your Qualtrics survey flow.
+response_qualtrics_fields:
+  response_id: "Response ID"
+  recorded_date: "Recorded Date"
+  finished: "Finished"
+  cid: "cid"
+
+# Column order in the Participants sheet.
+# The last three columns are written by manage_responses.py and are preserved
+# (never overwritten) by send_survey_emails.py on re-runs.
+tracker_columns:
+  - response_id
+  - recorded_date
+  - parent_name
+  - child_name
+  - delivery_email
+  - dob
+  - age
+  - status
+  - reason
+  - first_seen
+  - last_updated
+  - emailed_at
+  - last_mode
+  - survey_completed_at
+  - follow_up_1_sent_at
+  - follow_up_2_sent_at

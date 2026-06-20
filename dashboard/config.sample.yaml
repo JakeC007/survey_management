@@ -1,0 +1,41 @@
+# Dashboard config — TEMPLATE.
+# Copy this file to config.yaml and fill in your values:
+#     copy config.sample.yaml config.yaml      (Windows)
+# config.yaml is gitignored, so your real survey links never get committed.
+
+# ---------------------------------------------------------------------------
+# Qualtrics data sources
+# Paste the links to the two Qualtrics surveys you export data from, so the
+# dashboard can show them as one-click shortcuts. Use the "Data & Analysis"
+# (responses) page URL for each survey — that's where you hit Export > CSV/ZIP.
+# To grab the URL: open the survey in Qualtrics, go to Data & Analysis, and
+# copy the address bar. It looks like:
+#   https://YOURORG.qualtrics.com/responses/#/surveys/SV_xxxxxxxxxxxx
+# ---------------------------------------------------------------------------
+qualtrics_data_sources:
+  consent_survey:
+    name: "Consent / screener survey"
+    feeds: "Step 1 — consent_management"
+    data_export_url: "https://YOURORG.qualtrics.com/responses/#/surveys/SV_REPLACE_WITH_CONSENT_SURVEY_ID"
+
+  response_survey:
+    name: "Teen response survey"
+    feeds: "Steps 2 & 3 — response_management + payment_management"
+    data_export_url: "https://YOURORG.qualtrics.com/responses/#/surveys/SV_REPLACE_WITH_RESPONSE_SURVEY_ID"
+
+# ---------------------------------------------------------------------------
+# Where the dashboard reads its numbers from (relative to survey_management/)
+# ---------------------------------------------------------------------------
+paths:
+  tracker_file: "data/participant_tracker_auto.xlsx"
+  payment_tracker_file: "data/payment_tracker.xlsx"
+  unpaid_report_file: "data/payment_report_unpaid.xlsx"
+  ingest_dir: "ingest"
+
+# ---------------------------------------------------------------------------
+# Local server
+# ---------------------------------------------------------------------------
+server:
+  host: "127.0.0.1"
+  port: 5000
+  open_browser: true

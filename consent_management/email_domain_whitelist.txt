@@ -1,0 +1,10 @@
+# Never treat these as disposable, even if a heuristic flags them.
+# Protects real schools / institutions (your K-12 study population).
+# Exact domains:
+cps.edu
+ucls.uchicago.edu
+lsoc.org
+# Suffix rules (handle in code):
+# rule: *.edu
+# rule: *.k12.*
+# rule: *.sch.uk

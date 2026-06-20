@@ -1,0 +1,45 @@
+{
+  "_about": "CANONICAL shared exclusion thresholds for the Teen AI Survey. Edit here, then run sync_qc.bat. JSON (not YAML) so it loads with the standard library in BOTH repos, including the analysis repo which does not depend on PyYAML. quality_filter.py reads this file if present; otherwise it uses identical embedded defaults. Tune on real data BEFORE looking at outcomes, then freeze and record final values in QUALITY_CONTROL.md.",
+
+  "total_duration_floor_sec": 180,
+  "page_floor_sec": 2.0,
+  "min_fast_pages_to_flag": 2,
+
+  "recaptcha_min": 0.7,
+  "recaptcha_error_is_flag": true,
+  "_recaptcha_error_note": "Q_RecaptchaStatus == 'error' raises its own flag, independent of the numeric score. It is the strongest correlate of junk open-text (errored on ~45% of flagged responses vs ~9% of clean) and was previously unused. It is an ordinary counting flag, not a standalone exclusion: a privacy-browser teen whose only signal is a reCAPTCHA error is not dropped from analysis, but is routed to Hold for a human to review.",
+
+  "attention_fail_min": 1,
+  "hard_exclude_if_all_attention_failed": true,
+
+  "min_items_for_straightline": 5,
+  "min_straightline_matrices_to_flag": 1,
+  "_straightline_note": "Each group is one matrix sharing a response scale. Only the long matrices are listed: the three 8-item comfort grids and the 5-item attitudes grid. The 4-item access grids are intentionally omitted (a uniform answer across 4 items is too plausible to treat as straight-lining). Embedded attention-check columns (Q220, Q218, Q219) are intentionally NOT listed, so straight-lining and attention stay independent signals.",
+  "straightline_groups": {
+    "comfort_grid_1": ["Q71", "Q72", "Q73", "Q74", "Q75", "Q76", "Q77", "Q78"],
+    "comfort_grid_2": ["Q45", "Q46", "Q47", "Q48", "Q49", "Q50", "Q51", "Q52"],
+    "comfort_grid_3": ["Q26", "Q27", "Q28", "Q29", "Q30", "Q31", "Q32", "Q33"],
+    "privacy_attitudes": ["Q14", "Q15", "Q16", "Q17", "Q18"]
+  },
+
+  "_opentext_note": "Open-text content screen for the two free-text 'walk us through' boxes. cross_respondent_duplicate ignores answers that merely echo an answer-option (option_text below, matched by token Jaccard >= option_echo_jaccard) and requires at least duplicate_min_words / duplicate_min_chars, so option restatements by real teens never trip it.",
+  "open_text_cols": ["Q62", "Q63"],
+  "duplicate_min_words": 7,
+  "duplicate_min_chars": 30,
+  "option_echo_jaccard": 0.6,
+  "option_text": [
+    "your own ai account",
+    "your schools ai account",
+    "an ai that keeps a record of your past work to give faster more personalized help",
+    "an ai that keeps no record of your work so nothing about you is stored"
+  ],
+
+  "fraud_blacklist_path": "",
+  "_fraud_blacklist_note": "Blank = auto-discover data/fraud_blacklist.csv near this file or the export. When found, a completer whose cid or survey IP is on the list is exclude_recommended for ANALYSIS too (not just suppressed at payment). At payment the blacklist still routes to the Fraud bucket (never paid); this only ensures the same rows drop from the analysis sample.",
+
+  "hard_exclude_signals": ["gibberish", "cross_respondent_duplicate", "both_blank_finished", "llm_paste_format", "fraud_blacklist"],
+  "_hard_exclude_note": "Near-certain junk that excludes on its own, bypassing the >=2 combination rule (requiring a second flag is what let the LLM-paste cluster pass). recaptcha_error is deliberately NOT hard: it counts toward n_flags and routes to Hold, but does not drop a row from analysis by itself.",
+
+  "exclude_min_flags": 2,
+  "count_incomplete_toward_exclusion": false
+}

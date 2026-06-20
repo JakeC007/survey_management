@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Survey pipeline console</title>
+<style>
+  :root { --bg:#faf9f5; --card:#fff; --ink:#1f1e1c; --muted:#76746e;
+          --line:#e6e3da; --info:#185fa5; --info-bg:#e6f1fb;
+          --ok:#0f6e56; --ok-bg:#e1f5ee; --warn:#854f0b; --warn-bg:#faeeda; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         font-size:15px; line-height:1.5; }
+  .wrap { max-width:1040px; margin:0 auto; padding:28px 22px 60px; }
+  h1 { font-size:21px; font-weight:600; margin:0; }
+  .sub { color:var(--muted); font-size:13px; margin-top:3px; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .top { display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px; }
+  .pill { font-size:12px; color:var(--muted); background:var(--card);
+          border:1px solid var(--line); padding:5px 11px; border-radius:8px; }
+  button.refresh { font:inherit; font-size:13px; cursor:pointer; background:var(--card);
+          border:1px solid var(--line); padding:6px 12px; border-radius:8px; color:var(--ink); }
+  button.refresh:hover { background:#f1efe8; }
+  .banner { background:var(--warn-bg); color:var(--warn); border-radius:10px;
+            padding:10px 14px; font-size:13px; margin:16px 0 0; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+           gap:12px; margin:10px 0 22px; }
+  /* Stat cards. Default = neutral "downstream" group. Colors meet WCAG 2.1 AA
+     (>=4.5:1) for the label/desc text against each card background. */
+  .stat { background:#f1efe8; border-left:4px solid #b4b2a9; border-radius:10px; padding:13px 15px; }
+  .stat-label { font-size:13px; font-weight:600; color:#444441; }
+  .stat-value { font-size:27px; font-weight:600; margin-top:3px; color:#2c2c2a; }
+  .stat-desc { font-size:11.5px; color:#5f5e5a; margin-top:4px; }
+  /* Blue = invite funnel (consent received, invites sent). */
+  .stat.invite { background:#e6f1fb; border-left-color:#185fa5; }
+  .stat.invite .stat-label { color:#0c447c; }
+  .stat.invite .stat-value { color:#042c53; }
+  .stat.invite .stat-desc  { color:#185fa5; }
+  /* Green = completed surveys. */
+  .stat.done { background:#e1f5ee; border-left-color:#0f6e56; }
+  .stat.done .stat-label { color:#085041; }
+  .stat.done .stat-value { color:#04342c; }
+  .stat.done .stat-desc  { color:#0f6e56; }
+  .stat-legend { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin:18px 0 0; }
+  .stat-legend .lg { display:inline-flex; align-items:center; gap:6px; }
+  .stat-legend .lg::before { content:""; width:11px; height:11px; border-radius:3px; }
+  .lg-invite::before { background:#e6f1fb; border:1px solid #185fa5; }
+  .lg-done::before   { background:#e1f5ee; border:1px solid #0f6e56; }
+  .lg-down::before   { background:#f1efe8; border:1px solid #b4b2a9; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:16px 18px; }
+  .card-h { display:flex; align-items:center; gap:9px; margin-bottom:6px; }
+  .step-badge { font-size:12px; font-weight:600; color:var(--info);
+                background:var(--info-bg); padding:2px 9px; border-radius:7px; }
+  .step-badge.gray { color:var(--muted); background:#f1efe8; }
+  .muted { color:var(--muted); font-size:13px; }
+  .mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; color:var(--muted); }
+  .grid3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; }
+  .card h3 { font-size:16px; font-weight:600; margin:2px 0 2px; }
+  .desc { font-size:13px; color:var(--muted); margin:6px 0 12px; }
+  .btns { display:flex; flex-direction:column; gap:7px; }
+  .btn { font:inherit; font-size:14px; cursor:pointer; text-align:left;
+         background:var(--card); border:1px solid var(--line); border-radius:8px;
+         padding:8px 12px; color:var(--ink); transition:background .12s; }
+  .btn:hover { background:#f1efe8; }
+  .btn.send { border-color:#cdbfa6; }
+  .btn.send:hover { background:var(--warn-bg); }
+  .tag { display:inline-flex; gap:6px; margin-bottom:11px; }
+  .tag span { font-size:12px; padding:3px 9px; border-radius:7px; }
+  .tag .pay { color:var(--ok); background:var(--ok-bg); }
+  .tag .hold { color:var(--warn); background:var(--warn-bg); }
+  .tag .fraud { color:#9a1f1f; background:#fbe3e3; }
+  .ql-card { margin-bottom:18px; }
+  .ql-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
+  .ql { display:flex; flex-direction:column; text-decoration:none; color:var(--ink);
+        border:1px solid var(--line); border-radius:9px; padding:9px 13px; min-width:230px; }
+  .ql:hover { background:#f1efe8; }
+  .ql.warn { border-color:#cdbfa6; background:var(--warn-bg); }
+  .ql-name { font-weight:600; font-size:14px; }
+  .ql-feeds { font-size:12px; color:var(--muted); margin-top:2px; }
+  .section-label { font-size:13px; color:var(--muted); margin:24px 0 10px; font-weight:600; }
+  #out { margin-top:20px; }
+  #out pre { background:#1f1e1c; color:#e8e6df; border-radius:10px; padding:14px 16px;
+             font-size:12.5px; white-space:pre-wrap; overflow:auto; max-height:340px; margin:8px 0 0; }
+  .out-h { display:flex; justify-content:space-between; align-items:center; }
+  .spin { display:none; font-size:13px; color:var(--muted); }
+  .foot { margin-top:26px; font-size:12px; color:var(--muted); }
+</style></head>
+<body><div class="wrap">
+
+  <div class="top">
+    <div><h1>Survey pipeline console</h1>
+      <div class="sub">data/__TRACKER_NAME__</div></div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <span class="pill">ingest/: __INGEST__ ZIP(s)</span>
+      <span class="pill">tracker: __LAST_UPDATED__</span>
+      <button class="refresh" onclick="location.reload()">Refresh</button>
+    </div>
+  </div>
+
+  __BANNER__
+
+  <div class="stat-legend">
+    <span class="lg lg-invite">Invite funnel</span>
+    <span class="lg lg-done">Completed</span>
+    <span class="lg lg-down">Downstream</span>
+  </div>
+  <div class="stats">__CARDS__</div>
+
+  __QLINKS__
+
+  <div class="section-label">Run the pipeline (left to right)</div>
+  <div class="grid3">
+
+    <div class="card">
+      <div class="card-h"><span class="step-badge">Step 1</span></div>
+      <h3>Consent &rarr; invites</h3>
+      <div class="mono">consent_management/send_survey_emails.py</div>
+      <div class="desc">Reads the newest consent ZIP, builds the tracker, emails eligible teens their survey link.</div>
+      <div class="btns">
+        <button class="btn" onclick="run('consent_dry','Dry run consent step?')">Dry run</button>
+        <button class="btn" onclick="run('consent_draft','Stage invitation drafts in Outlook?')">Draft invites</button>
+        <button class="btn send" onclick="run('consent_send','SEND real invitation emails now?')">Send invites</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><span class="step-badge">Step 2</span></div>
+      <h3>Completions + reminders</h3>
+      <div class="mono">response_management/manage_responses.py</div>
+      <div class="desc">Matches completions by cid, stamps the tracker, sends follow-up 1 (day 3) and 2 (day +2).</div>
+      <div class="btns">
+        <button class="btn" onclick="run('response_dry','Dry run: stamp completions, send nothing?')">Dry run</button>
+        <button class="btn" onclick="run('response_draft','Stage reminder drafts in Outlook?')">Draft reminders</button>
+        <button class="btn send" onclick="run('response_send','SEND reminder / re-invite emails now?')">Send reminders</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><span class="step-badge">Step 3</span></div>
+      <h3>Gift-card payment</h3>
+      <div class="mono">payment_management/manage_payments.py</div>
+      <div class="tag"><span class="pay">Pay: __PAY__</span><span class="hold">Hold: __HOLD__</span><span class="fraud">Fraud: __FRAUD__</span></div>
+      <div class="desc">Builds the unpaid Pay / Hold / Fraud report from completions, quality flags, and the fraud blacklist. Fraud entries are never paid. You send cards by hand.</div>
+      <div class="btns">
+        <button class="btn" onclick="run('payment_dry','Dry run payment report?')">Dry run</button>
+        <button class="btn" onclick="run('payment_build','Refresh ledger and write the unpaid report?')">Build report</button>
+        <button class="btn" onclick="openReport()">Open unpaid report</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="out">
+    <div class="out-h"><div class="section-label" style="margin:0;">Output</div>
+      <span class="spin" id="spin">running&hellip;</span></div>
+    <pre id="outpre">Run a step to see its output here. Sends ask for confirmation first.</pre>
+  </div>
+
+  <div class="foot">
+    Buttons run the existing scripts in each folder. Send / draft actions drive classic Outlook on this PC.
+    Drop the correct Qualtrics export ZIP in <code>ingest/</code> before running a step.
+  </div>
+
+<script>
+  const spin = document.getElementById('spin');
+  const out = document.getElementById('outpre');
+  const pre = document.getElementById('outpre');
+  function busy(b){ spin.style.display = b ? 'inline' : 'none';
+    document.querySelectorAll('.btn').forEach(x => x.disabled = b); }
+  function atBottom(){ return pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24; }
+
+  // Streamed run: append output lines to the panel as they arrive.
+  async function runStream(action){
+    busy(true); out.textContent = '';
+    try {
+      const r = await fetch('/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action})});
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      while (true){
+        const {done, value} = await reader.read();
+        if (done) break;
+        const stick = atBottom();
+        out.textContent += dec.decode(value, {stream:true});
+        if (stick) pre.scrollTop = pre.scrollHeight;   // auto-follow unless user scrolled up
+      }
+      if (!out.textContent.trim()) out.textContent = '(no output)';
+    } catch(e) { out.textContent += '\nRequest failed: ' + e; }
+    busy(false);
+  }
+
+  // Non-streamed JSON POST (used by Open report).
+  async function post(path, body){
+    busy(true); out.textContent = 'Working…';
+    try {
+      const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+      const j = await r.json();
+      out.textContent = j.output || '(no output)';
+    } catch(e) { out.textContent = 'Request failed: ' + e; }
+    busy(false);
+  }
+  function run(action, confirmMsg){
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    runStream(action);
+  }
+  function openReport(){ post('/open-report', {}); }
+</script>
+</div></body></html>
