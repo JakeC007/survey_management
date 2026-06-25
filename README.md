@@ -131,6 +131,12 @@ survey_management/
 │   ├── quality_config.json      Vendored copy of the shared thresholds.
 │   └── README.md                Payment workflow details.
 │
+├── examine_indv/               Look up ONE participant and read their answers.
+│   ├── examine_app.py          Local web app: search by name/RID/email, see
+│   │                           status (PAY/HOLD/FRAUD/PAID) + reason + answers.
+│   ├── examine_data.py         Read-only data layer (no writes to any file).
+│   └── README.md               How it works and how to run it.
+│
 └── docs/
     └── send_survey_sample.png
 ```
@@ -388,6 +394,23 @@ by two switches at the top of `manage_payments.py`:
 - `HOLD_ON_ANY_FLAG` — `True` (current setting, June 2026) holds on any single
   flag (`n_flags >= 1`); `False` holds only on the filter's >= 2-flag combination
   rule. Payment-side only; the analysis `exclude_min_flags` stays at 2.
+
+
+## Examine an individual (`examine_indv/`)
+
+A read-only lookup tool for when you want to understand *one* participant rather
+than run a batch. Start it with `python examine_indv/examine_app.py`, then open
+the local URL it prints. Search by name (first, or first + last), by response ID
+(`R_…`), or by email. It finds the person in `participant_tracker_auto.xlsx`,
+confirms whether they have a completed survey, tells you their payment status
+(PAY / HOLD / FRAUD / PAID) and the reason, and shows their survey answers plus
+key quality metadata.
+
+It reads the same files the pipeline writes (`participant_tracker_auto.xlsx`,
+`payment_tracker.xlsx`, `fraud_blacklist.csv`, and the newest survey ZIP in
+`ingest/`) and never writes to any of them. Status precedence and the
+fraud-blacklist cross-check mirror the payment pipeline. See
+`examine_indv/README.md` for details.
 
 
 ## Fraud screening (consent + payment)
