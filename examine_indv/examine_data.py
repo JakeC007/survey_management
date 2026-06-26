@@ -86,6 +86,86 @@ def _read_xlsx(path: str, sheet: str | None = None):
 
 
 # --------------------------------------------------------------------------- #
+# Offline ZIP-code -> "City, ST" annotation
+# ---------------------------------------------------------------------------
+# Keyed off a small bundled file (zip_lookup.csv, indexed by the 3-digit ZIP
+# prefix) so it works with NO internet connection. If that file is missing or a
+# prefix isn't in it, we fall back to a built-in prefix->state table, and
+# finally to nothing (the annotation is simply skipped). Nothing here raises,
+# so a missing/garbled file can never break the viewer.
+# --------------------------------------------------------------------------- #
+ZIP_LOOKUP_CSV = os.path.join(HERE, "zip_lookup.csv")
+
+# ZIP3 prefix ranges -> US state. Only used when a prefix is absent from
+# zip_lookup.csv, to still surface at least the state for an unseen ZIP.
+_STATE_PREFIX_RANGES = [
+    (6, 9, "PR"), (10, 27, "MA"), (28, 29, "RI"), (30, 38, "NH"),
+    (39, 49, "ME"), (50, 54, "VT"), (55, 55, "MA"), (56, 59, "VT"),
+    (60, 69, "CT"), (70, 89, "NJ"), (100, 149, "NY"), (150, 196, "PA"),
+    (197, 199, "DE"), (200, 205, "DC"), (206, 219, "MD"), (220, 246, "VA"),
+    (247, 268, "WV"), (270, 289, "NC"), (290, 299, "SC"), (300, 319, "GA"),
+    (320, 349, "FL"), (350, 369, "AL"), (370, 385, "TN"), (386, 397, "MS"),
+    (398, 399, "GA"), (400, 427, "KY"), (430, 459, "OH"), (460, 479, "IN"),
+    (480, 499, "MI"), (500, 528, "IA"), (530, 549, "WI"), (550, 567, "MN"),
+    (570, 577, "SD"), (580, 588, "ND"), (590, 599, "MT"), (600, 629, "IL"),
+    (630, 658, "MO"), (660, 679, "KS"), (680, 693, "NE"), (700, 714, "LA"),
+    (716, 729, "AR"), (730, 749, "OK"), (750, 799, "TX"), (800, 816, "CO"),
+    (820, 831, "WY"), (832, 838, "ID"), (840, 847, "UT"), (850, 865, "AZ"),
+    (870, 884, "NM"), (885, 885, "TX"), (889, 898, "NV"), (900, 961, "CA"),
+    (967, 968, "HI"), (970, 979, "OR"), (980, 994, "WA"), (995, 999, "AK"),
+]
+
+_ZIP3_CITY_STATE = None  # lazy cache: {prefix: (city, state)}
+
+
+def _load_zip_lookup() -> dict:
+    """Load zip_lookup.csv into {prefix: (city, state)}; '' table if absent."""
+    global _ZIP3_CITY_STATE
+    if _ZIP3_CITY_STATE is not None:
+        return _ZIP3_CITY_STATE
+    table: dict = {}
+    try:
+        with open(ZIP_LOOKUP_CSV, newline="", encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                pre = _s(row.get("prefix")).zfill(3)[:3]
+                state = _s(row.get("state"))
+                if pre and state:
+                    table[pre] = (_s(row.get("city")), state)
+    except OSError:
+        pass  # no bundled file -> prefix->state fallback only
+    _ZIP3_CITY_STATE = table
+    return table
+
+
+def _state_from_prefix(prefix: str) -> str:
+    try:
+        n = int(prefix)
+    except ValueError:
+        return ""
+    for lo, hi, st in _STATE_PREFIX_RANGES:
+        if lo <= n <= hi:
+            return st
+    return ""
+
+
+def zip_location(zipcode) -> str:
+    """Return 'City, ST' (or just 'ST') for a US ZIP, or '' if unknown.
+
+    Offline only and tolerant of messy input (uses the first digits found).
+    """
+    digits = re.sub(r"\D", "", _s(zipcode))
+    if len(digits) < 3:
+        return ""
+    prefix = digits[:3]
+    city, state = _load_zip_lookup().get(prefix, ("", ""))
+    if not state:
+        state = _state_from_prefix(prefix)
+    if city and state:
+        return f"{city}, {state}"
+    return state or ""
+
+
+# --------------------------------------------------------------------------- #
 # Find the most recent survey-answer export (NOT the consent export)
 # --------------------------------------------------------------------------- #
 _FNAME_DATE_RE = re.compile(r"_([A-Z][a-z]+ \d{1,2}, \d{4})_(\d{2})\.(\d{2})")
@@ -408,17 +488,22 @@ class Store:
                 continue
             if code.startswith("Q_"):       # system quality fields
                 continue
-            value = row[i] if i < len(row) else ""
-            if not _s(value):
+            value = _s(row[i]) if i < len(row) else ""
+            if not value:
                 continue
             label = _s(self.labels[i]) if i < len(self.labels) else ""
-            is_other = code.endswith("_TEXT")
+            is_other = is_open_ended(code)
             if is_other and label:
                 label = label.replace(" - Text", "").strip()
+            # Annotate the ZIP-code answer with its city/state (offline lookup).
+            if "zip code" in label.lower():
+                loc = zip_location(value)
+                if loc:
+                    value = f"{value}  ·  {loc}"
             out.append({
                 "code": code,
                 "label": label or code,
-                "value": _s(value),
+                "value": value,
                 "other": is_other,
             })
         return out
@@ -435,3 +520,37 @@ def load_all() -> Store:
 
 def get_store() -> Store:
     return _STORE or load_all()
+
+
+# =========================================================================== #
+# OPEN-ENDED (FREE-TEXT) QUESTIONS
+# --------------------------------------------------------------------------- #
+# The survey's open-ended / free-text questions, gathered in one place so they
+# are easy to view and maintain. These are the "Other (please specify)" write-
+# ins and any other typed-response fields. Any column whose code ends in
+# "_TEXT" is treated as open-ended automatically; the explicit list below is
+# the human-readable record of which questions those are, and lets us flag an
+# open-ended question even if Qualtrics renames the column.
+#
+# Codes are from the K12 Privacy and AI Extension export.
+# =========================================================================== #
+OPEN_ENDED_CODES = {
+    "Q5_10_TEXT":   "Which AI tools have you used for schoolwork? - Other",
+    "Q7_10_TEXT":   "What AI tool has your school provided/assigned? - Other",
+    "Q9_10_TEXT":   "How do you use AI tools for school? - Other",
+    "Q10_10_TEXT":  "Why do you use AI tools for school? - Other",
+    "Q58_11_TEXT":  "Have you ever changed how you use AI tools? - Other",
+    "Q59_11_TEXT":  "Main reason for changing how you use AI tools? - Other",
+    "Q21_45_TEXT":  "What kinds of information do AI tools collect? - Other",
+    "Q22_15_TEXT":  "Why do AI tools collect information about students? - Other",
+}
+
+
+def is_open_ended(code: str) -> bool:
+    """True if a question column is an open-ended / free-text response.
+
+    Matches the explicit OPEN_ENDED_CODES above, plus any Qualtrics "_TEXT"
+    write-in column, so newly added free-text fields are handled automatically.
+    """
+    code = _s(code)
+    return code in OPEN_ENDED_CODES or code.endswith("_TEXT")
