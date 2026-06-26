@@ -7,14 +7,17 @@ Run it:
     python examine_app.py
 then open the URL it prints (defaults to http://127.0.0.1:8765).
 
-You type a name (first, or first + last), a response/RID (R_xxx), or an email.
-It finds the person in participant_tracker_auto, confirms whether they have a
-completed survey, tells you their payment status (PAY / HOLD / FRAUD / PAID)
-and why, and shows their answers plus key quality metadata.
+Type a name (first, or first + last), a response/RID (R_xxx), or an email.
+It finds the person, confirms whether they have a completed survey, tells you
+their status (PAY / HOLD / FRAUD / PAID) and why, and shows their answers plus
+key quality metadata.
 
-No third-party web framework needed: this uses only the Python standard
-library plus openpyxl (already in the project's requirements). Data is loaded
-once at startup from examine_data.py.
+The detail view has a "Mark as fraud" button. It asks for confirmation, then
+writes the person into fraud_blacklist.csv (the source the payment pipeline
+reads), payment_tracker.xlsx, and payment_report_unpaid.xlsx, so the change is
+durable and the dashboard picks it up. See examine_write.py.
+
+Standard library only, plus openpyxl (already in the project requirements).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import examine_data
+import examine_write
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -60,7 +64,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        padding:13px 14px;border-radius:10px;font-size:15px;outline:none}
   input[type=text]:focus{border-color:var(--accent)}
   button{background:var(--accent);color:#07101f;border:0;border-radius:10px;padding:0 20px;
-       font-size:15px;font-weight:600;cursor:pointer}
+       font-size:15px;font-weight:600;cursor:pointer;height:46px}
   button:hover{filter:brightness(1.08)}
   .hint{color:var(--muted);font-size:12px;margin:8px 2px 18px}
   .candidates{display:flex;flex-direction:column;gap:8px;margin-top:8px}
@@ -84,6 +88,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px}
   .statusrow{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
   .bigbadge{font-size:15px;font-weight:800;letter-spacing:.05em;padding:8px 16px;border-radius:10px}
+  .spacer{flex:1}
   .why{margin-top:12px;color:#d9dde6;font-size:14px;background:var(--panel2);border-left:3px solid var(--line);
        padding:10px 14px;border-radius:0 8px 8px 0}
   .why.fraud{border-color:var(--fraud)} .why.hold{border-color:var(--hold)}
@@ -102,10 +107,37 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .empty{color:var(--muted);font-style:italic}
   .notice{background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);color:#f6d08a;
        border-radius:10px;padding:12px 14px;font-size:14px}
-  .back{background:none;color:var(--accent);padding:0;font-weight:600;font-size:14px;margin-bottom:14px}
-  .back:hover{text-decoration:underline}
+  .back{background:none;color:var(--accent);padding:0;font-weight:600;font-size:14px;margin-bottom:14px;height:auto}
+  .back:hover{text-decoration:underline;filter:none}
   .err{color:#f6a6a6}
   code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12.5px}
+
+  /* danger button */
+  .btn-danger{background:rgba(239,68,68,.14);color:#ff8b8b;border:1px solid rgba(239,68,68,.5);
+       height:38px;padding:0 16px;border-radius:9px;font-size:13.5px;font-weight:600}
+  .btn-danger:hover{background:rgba(239,68,68,.22);filter:none}
+  .already{color:var(--fraud);font-size:13px;font-weight:600}
+
+  /* modal */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;
+       justify-content:center;z-index:50}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 24px;
+       width:min(520px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .modal h3{margin:0 0 8px;font-size:17px}
+  .modal p{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+  .modal textarea{width:100%;min-height:70px;background:var(--panel2);border:1px solid var(--line);
+       color:var(--text);border-radius:9px;padding:10px 12px;font-size:14px;resize:vertical;font-family:inherit}
+  .modal .what{background:var(--panel2);border-radius:9px;padding:10px 12px;margin:12px 0 4px;font-size:12.5px;color:var(--muted)}
+  .modal .what b{color:var(--text)}
+  .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+  .btn-ghost{background:none;border:1px solid var(--line);color:var(--text);height:42px;border-radius:9px}
+  .btn-ghost:hover{border-color:var(--accent);filter:none}
+  .btn-confirm{background:var(--fraud);color:#fff;height:42px;border-radius:9px}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);
+       border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-size:13.5px;z-index:60;
+       max-width:90vw;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+  .toast.ok{border-color:rgba(34,197,94,.5)} .toast.bad{border-color:rgba(239,68,68,.5)}
+  .toast ul{margin:6px 0 0;padding-left:18px} .toast li{margin:2px 0}
 </style>
 </head>
 <body>
@@ -122,25 +154,26 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div class="hint">Examples: <code>Harper Patrick</code> &nbsp;·&nbsp; <code>Eric</code> (shows every match) &nbsp;·&nbsp; <code>R_3Q7zMYZjRHFPI2d</code> &nbsp;·&nbsp; <code>name@email.com</code></div>
   <div id="out"></div>
 </div>
+<div id="modal-root"></div>
+<div id="toast-root"></div>
 
 <script>
-const out = document.getElementById('q');
-const dst = document.getElementById('out');
-
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function badgeClass(s){return 'b-'+String(s).replace(/[^A-Z]/g,'');}
+let CURRENT=null; // current detail data
 
 async function doSearch(){
   const q = document.getElementById('q').value.trim();
-  if(!q){dst.innerHTML='';return;}
-  dst.innerHTML = '<div class="hint">Searching…</div>';
+  if(!q){document.getElementById('out').innerHTML='';return;}
+  document.getElementById('out').innerHTML = '<div class="hint">Searching…</div>';
   let res;
   try{ res = await (await fetch('/api/search?q='+encodeURIComponent(q))).json(); }
-  catch(e){ dst.innerHTML='<div class="err">Request failed: '+esc(e)+'</div>'; return; }
+  catch(e){ document.getElementById('out').innerHTML='<div class="err">Request failed: '+esc(e)+'</div>'; return; }
   renderCandidates(res);
 }
 
 function renderCandidates(res){
+  const dst = document.getElementById('out');
   const c = res.candidates||[];
   if(c.length===0){
     dst.innerHTML = '<div class="card"><div class="empty">No one found for “'+esc(res.query)+'”. '
@@ -165,36 +198,40 @@ function renderCandidates(res){
 }
 
 async function openDetail(rid){
-  dst.innerHTML = '<div class="hint">Loading…</div>';
+  document.getElementById('out').innerHTML = '<div class="hint">Loading…</div>';
   let d;
   try{ d = await (await fetch('/api/detail?rid='+encodeURIComponent(rid))).json(); }
-  catch(e){ dst.innerHTML='<div class="err">Request failed: '+esc(e)+'</div>'; return; }
-  if(d.error){ dst.innerHTML='<div class="card err">'+esc(d.error)+'</div>'; return; }
-  renderDetail(d);
+  catch(e){ document.getElementById('out').innerHTML='<div class="err">Request failed: '+esc(e)+'</div>'; return; }
+  if(d.error){ document.getElementById('out').innerHTML='<div class="card err">'+esc(d.error)+'</div>'; return; }
+  CURRENT=d; renderDetail(d);
 }
 
 function renderDetail(d){
+  const dst = document.getElementById('out');
   const p = d.person;
   const st = d.status;
   const lc = st==='FRAUD'?'fraud':st==='HOLD'?'hold':st==='PAID'?'paid':st==='PAY'?'pay':'';
   let h = '<div class="detail"><button class="back" onclick="doSearch()">← back to results</button>';
 
-  // status + person
-  h += '<div class="card">';
-  h += '<div class="statusrow"><span class="bigbadge '+badgeClass(st)+'">'+esc(st)+'</span>'
+  h += '<div class="card"><div class="statusrow">'
+     + '<span class="bigbadge '+badgeClass(st)+'">'+esc(st)+'</span>'
      + '<div><div class="name">'+esc(p.child_name||'(no child name)')+'</div>'
      + '<div class="idline">parent/guardian: '+esc(p.parent_name||'—')+' &nbsp;·&nbsp; '+esc(p.delivery_email||'—')
-     + ' &nbsp;·&nbsp; grade '+esc(p.grade||'—')+' &nbsp;·&nbsp; '+esc(p.response_id)+'</div></div></div>';
-  h += '<div class="why '+lc+'"><b>Why '+esc(st)+':</b> '+esc(d.reason||'—')+'</div>';
+     + ' &nbsp;·&nbsp; grade '+esc(p.grade||'—')+' &nbsp;·&nbsp; '+esc(p.response_id)+'</div></div>'
+     + '<div class="spacer"></div>';
+  if(st==='FRAUD'){
+    h += '<span class="already">✓ marked fraud</span>';
+  }else{
+    h += '<button class="btn-danger" onclick="openFraudModal()">Mark as fraud</button>';
+  }
   h += '</div>';
+  h += '<div class="why '+lc+'"><b>Why '+esc(st)+':</b> '+esc(d.reason||'—')+'</div></div>';
 
-  // completion notice
   if(!d.completed){
     h += '<div class="card"><div class="notice">No completed survey on file for this person, so there are no answers to show. '
        + 'The status above reflects what the tracker knows so far.</div></div>';
   }
 
-  // metadata
   if(d.metadata && d.metadata.length){
     h += '<div class="card"><h2>Key metadata &amp; quality signals</h2><div class="grid">';
     for(const m of d.metadata){
@@ -203,7 +240,6 @@ function renderDetail(d){
     h += '</div></div>';
   }
 
-  // answers
   if(d.completed){
     h += '<div class="card"><h2>Survey answers ('+ (d.answers?d.answers.length:0) +')</h2>';
     if(d.answers && d.answers.length){
@@ -219,6 +255,57 @@ function renderDetail(d){
 
   h += '<div class="hint">Answers sourced from <code>'+esc(d.export_name||'?')+'</code>.</div></div>';
   dst.innerHTML = h;
+}
+
+/* ---- Mark-as-fraud confirmation modal ---- */
+function openFraudModal(){
+  if(!CURRENT) return;
+  const p = CURRENT.person;
+  const root = document.getElementById('modal-root');
+  root.innerHTML =
+    '<div class="overlay" onclick="if(event.target===this)closeModal()">'
+    + '<div class="modal">'
+    + '<h3>Mark this person as fraud?</h3>'
+    + '<p>'+esc(p.child_name||p.response_id)+' ('+esc(p.delivery_email||'no email')+') · '+esc(p.response_id)+'</p>'
+    + '<label class="k" style="color:var(--muted);font-size:12px">Reason (optional)</label>'
+    + '<textarea id="fraud-reason" placeholder="e.g. duplicate submission / fabricated identity / manual review"></textarea>'
+    + '<div class="what">This will write to: <b>fraud_blacklist.csv</b> (the source the payment pipeline reads), '
+    + '<b>payment_tracker.xlsx</b> (fraud=yes), and <b>payment_report_unpaid.xlsx</b> (moved to the Fraud sheet). '
+    + 'The dashboard will reflect it. This person will never be paid.</div>'
+    + '<div class="modal-actions">'
+    + '<button class="btn-ghost" onclick="closeModal()">Cancel</button>'
+    + '<button class="btn-confirm" id="fraud-go" onclick="confirmFraud()">Yes, mark as fraud</button>'
+    + '</div></div></div>';
+}
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+
+async function confirmFraud(){
+  const rid = CURRENT.person.response_id;
+  const reason = (document.getElementById('fraud-reason').value||'').trim();
+  const go = document.getElementById('fraud-go');
+  go.disabled = true; go.textContent = 'Saving…';
+  let res;
+  try{
+    res = await (await fetch('/api/mark_fraud',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({rid, reason})
+    })).json();
+  }catch(e){ closeModal(); toast(false,'Request failed: '+esc(e)); return; }
+  closeModal();
+  if(res.error){ toast(false, esc(res.error)); return; }
+  const r = res.result || {};
+  const changed = (r.changed||[]).concat(r.skipped||[]);
+  let msg = r.ok ? '<b>Marked as fraud.</b>' : '<b>Marked with problems.</b>';
+  if(changed.length) msg += '<ul>'+changed.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
+  if((r.errors||[]).length) msg += '<ul>'+r.errors.map(x=>'<li class="err">'+esc(x)+'</li>').join('')+'</ul>';
+  toast(r.ok, msg);
+  if(res.detail){ CURRENT=res.detail; renderDetail(res.detail); }
+}
+
+function toast(ok, html){
+  const root = document.getElementById('toast-root');
+  root.innerHTML = '<div class="toast '+(ok?'ok':'bad')+'">'+html+'</div>';
+  setTimeout(()=>{ if(root.firstChild) root.innerHTML=''; }, 9000);
 }
 </script>
 </body>
@@ -265,15 +352,40 @@ class Handler(BaseHTTPRequestHandler):
             rid = (qs.get("rid") or [""])[0]
             try:
                 d = STORE.detail(rid)
-                if d is None:
-                    self._json({"error": f"No participant found for {rid!r}."}, 404)
-                else:
-                    self._json(d)
+                self._json(d if d is not None else {"error": f"No participant found for {rid!r}."},
+                           200 if d is not None else 404)
             except Exception as e:  # noqa: BLE001
                 self._json({"error": f"detail failed: {e}"}, 500)
             return
 
         self._send(404, "not found", "text/plain; charset=utf-8")
+
+    def do_POST(self):
+        global STORE
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/mark_fraud":
+            self._send(404, "not found", "text/plain; charset=utf-8")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except Exception as e:  # noqa: BLE001
+            self._json({"error": f"bad request: {e}"}, 400)
+            return
+
+        rid = (body.get("rid") or "").strip()
+        reason = (body.get("reason") or "").strip()
+        if not rid:
+            self._json({"error": "missing rid"}, 400)
+            return
+        try:
+            result = examine_write.mark_fraud(STORE, rid, reason)
+            # reload data so the (now fraud) status is reflected everywhere
+            STORE = examine_data.load_all()
+            detail = STORE.detail(rid)
+            self._json({"result": result, "detail": detail})
+        except Exception as e:  # noqa: BLE001
+            self._json({"error": f"mark_fraud failed: {e}"}, 500)
 
 
 # --------------------------------------------------------------------------- #

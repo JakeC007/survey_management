@@ -133,8 +133,12 @@ survey_management/
 │
 ├── examine_indv/               Look up ONE participant and read their answers.
 │   ├── examine_app.py          Local web app: search by name/RID/email, see
-│   │                           status (PAY/HOLD/FRAUD/PAID) + reason + answers.
-│   ├── examine_data.py         Read-only data layer (no writes to any file).
+│   │                           status (PAY/HOLD/FRAUD/PAID) + reason + answers,
+│   │                           and a "Mark as fraud" button.
+│   ├── examine_data.py         Read-only data layer.
+│   ├── examine_write.py        The only writer: "Mark as fraud" updates the
+│   │                           blacklist, payment_tracker, and unpaid report.
+│   ├── launch.sh / launch.bat  Launchers.
 │   └── README.md               How it works and how to run it.
 │
 └── docs/
@@ -408,8 +412,15 @@ key quality metadata.
 
 It reads the same files the pipeline writes (`participant_tracker_auto.xlsx`,
 `payment_tracker.xlsx`, `fraud_blacklist.csv`, and the newest survey ZIP in
-`ingest/`) and never writes to any of them. Status precedence and the
-fraud-blacklist cross-check mirror the payment pipeline. See
+`ingest/`). Status precedence and the fraud-blacklist cross-check mirror the
+payment pipeline.
+
+It is read-only except for one explicit action: a **Mark as fraud** button on
+the detail view. After a confirmation popup it appends to `fraud_blacklist.csv`
+(the source the payment pipeline reads), sets `fraud=yes` in
+`payment_tracker.xlsx`, and moves the person into the Fraud sheet of
+`payment_report_unpaid.xlsx`, so the change is durable and the dashboard reflects
+it. Writes are atomic and idempotent; close those workbooks in Excel first. See
 `examine_indv/README.md` for details.
 
 

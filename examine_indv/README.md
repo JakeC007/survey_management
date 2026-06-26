@@ -1,9 +1,9 @@
 # examine_indv — look up one participant
 
-A small **read-only** web tool for examining a single survey participant. Use it
-when you want to understand one person (their answers, why they're being paid or
-held), not when you want to run a batch. It writes to **nothing** — it only reads
-the files the rest of the pipeline produces.
+A small web tool for examining a single survey participant. Use it when you want
+to understand one person (their answers, why they're being paid or held), not
+when you want to run a batch. It is read-only **except** for one explicit action:
+the "Mark as fraud" button (see below).
 
 ## Run it
 
@@ -37,6 +37,32 @@ matches show a pick-list; no match shows a friendly "no one found".
    straightlining %, unanswered %, finished, duplicate-respondent).
 4. **Answers** — the substantive Q&A with full question text. Timing columns,
    lat/long, and system fields are filtered out.
+
+## Mark as fraud (the one write action)
+
+The detail view has a **Mark as fraud** button. It opens a confirmation popup
+(with an optional reason), and on confirm it writes the person into every place
+the project tracks fraud, so the change is durable and the dashboard reflects it:
+
+1. **`data/fraud_blacklist.csv`** — appends a row (`source=manual`). This is the
+   source of truth: the payment pipeline rebuilds its fraud verdict from this
+   file on every run, so the mark survives re-runs.
+2. **`data/payment_tracker.xlsx`** — sets `fraud=yes`, `fraud_reason`, and
+   `exclude_recommended=yes` on the person's row.
+3. **`data/payment_report_unpaid.xlsx`** — removes them from the Pay/Hold sheets
+   and adds them to the Fraud sheet, so the dashboard's Fraud count updates
+   immediately without waiting for a pipeline run.
+
+It is **atomic** (temp file then replace) and **idempotent** (re-marking someone
+already fraud is a no-op per file, and won't stack reasons). If a workbook is
+open in Excel the write fails with a clear message instead of corrupting it, so
+close `payment_tracker.xlsx` / `payment_report_unpaid.xlsx` before marking. All
+write logic lives in `examine_write.py`; nothing else in this folder writes.
+
+Note it does **not** change `participant_tracker_auto.xlsx` status. That column
+is owned by the consent/response pipeline, and the dashboard's separate
+"Flagged as fraud" card counts consent-time bot detections, which is a different
+thing from a manual payment-side fraud mark.
 
 ## How the data joins (important for future edits)
 

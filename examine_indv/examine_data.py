@@ -1,7 +1,7 @@
 """
 examine_data.py
 -----------------
-Data layer for the "examine an individual participant" tool.
+Read-only data layer for the "examine an individual participant" tool.
 
 Loads, from the survey_management project:
   - data/participant_tracker_auto.xlsx   (the master roster / lookup table)
@@ -9,13 +9,16 @@ Loads, from the survey_management project:
   - data/fraud_blacklist.csv             (cross-check for fraud by RID / email / IP)
   - ingest/K12 Privacy and AI Extension_*.zip  (the actual survey answers; latest export)
 
-Public API used by the web server:
-  load_all()                       -> Store  (call once at startup)
+Public API:
+  load_all()                       -> Store  (call once at startup; re-call to refresh)
   Store.search(query)              -> dict with candidate list (handles name collisions)
   Store.detail(response_id)        -> full record: status, reason, answers, metadata
 
 The join key across every file is the consent ResponseId, which equals:
     tracker.response_id  ==  payment_tracker.cid  ==  survey_export "cid" column
+
+The data/ and ingest/ directories can be overridden with the environment
+variables EXAMINE_DATA_DIR and EXAMINE_INGEST_DIR (used for testing).
 """
 
 from __future__ import annotations
@@ -36,8 +39,8 @@ import openpyxl
 # --------------------------------------------------------------------------- #
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-DATA = os.path.join(REPO, "data")
-INGEST = os.path.join(REPO, "ingest")
+DATA = os.environ.get("EXAMINE_DATA_DIR") or os.path.join(REPO, "data")
+INGEST = os.environ.get("EXAMINE_INGEST_DIR") or os.path.join(REPO, "ingest")
 
 TRACKER_XLSX = os.path.join(DATA, "participant_tracker_auto.xlsx")
 PAYMENT_XLSX = os.path.join(DATA, "payment_tracker.xlsx")
