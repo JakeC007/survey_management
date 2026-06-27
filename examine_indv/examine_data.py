@@ -47,6 +47,9 @@ PAYMENT_XLSX = os.path.join(DATA, "payment_tracker.xlsx")
 BLACKLIST_CSV = os.path.join(DATA, "fraud_blacklist.csv")
 
 RID_RE = re.compile(r"^R_[A-Za-z0-9]+$")
+# Long free-text "walk us through your decision" questions, surfaced in their
+# own card above the regular survey answers (and kept out of that list).
+FEATURED_TEXT_CODES = ("Q62", "Q63")
 # Qualtrics timing sub-columns we never want to show as a "question"
 TIMING_BITS = ("First Click", "Last Click", "Page Submit", "Click Count")
 
@@ -436,9 +439,28 @@ class Store:
             "reason": reason,
             "completed": completed,
             "metadata": self._metadata(rid, r, pay),
+            "featured_text": self._featured_text(rid) if completed else [],
             "answers": self._answers(rid) if completed else [],
             "export_name": self.export_name,
         }
+
+    def _featured_text(self, rid):
+        """Q62/Q63 long free-text answers, for the card above survey answers."""
+        row = self.ans_by_cid.get(rid)
+        if not row or not self.codes:
+            return []
+        idx = {c: i for i, c in enumerate(self.codes)}
+        out = []
+        for code in FEATURED_TEXT_CODES:
+            i = idx.get(code)
+            if i is None:
+                continue
+            value = _s(row[i]) if i < len(row) else ""
+            if not value:
+                continue
+            label = _s(self.labels[i]) if i < len(self.labels) else ""
+            out.append({"code": code, "label": label or code, "value": value})
+        return out
 
     def _metadata(self, rid, r, pay):
         out = []
@@ -469,7 +491,18 @@ class Store:
             add("Response type", col("Status"))
             add("Finished", col("Finished"))
             add("Progress (%)", col("Progress"))
-            add("Duration (sec)", col("Duration (in seconds)"))
+            # Self-reported ZIP (Q66), annotated with City, ST via offline lookup.
+            zip_raw = _s(col("Q66"))
+            if zip_raw:
+                loc = zip_location(zip_raw)
+                add("Zip code (self-reported)", f"{zip_raw}  ·  {loc}" if loc else zip_raw)
+            # Duration shown in minutes rather than raw seconds.
+            dur_raw = _s(col("Duration (in seconds)"))
+            if dur_raw:
+                try:
+                    add("Duration (min)", f"{float(dur_raw) / 60:.1f}")
+                except ValueError:
+                    add("Duration (min)", dur_raw)
             add("reCAPTCHA score", col("Q_RecaptchaScore"))
             add("Duplicate respondent", col("Q_DuplicateRespondent"))
             add("Straightlining (%)", col("Q_StraightliningPercentage"))
@@ -487,6 +520,8 @@ class Store:
             if any(bit in code for bit in TIMING_BITS):
                 continue
             if code.startswith("Q_"):       # system quality fields
+                continue
+            if code in FEATURED_TEXT_CODES:  # shown in their own card above
                 continue
             value = _s(row[i]) if i < len(row) else ""
             if not value:

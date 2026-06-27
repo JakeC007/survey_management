@@ -240,6 +240,15 @@ function renderDetail(d){
     h += '</div></div>';
   }
 
+  if(d.completed && d.featured_text && d.featured_text.length){
+    h += '<div class="card"><h2>Open-text responses</h2>';
+    for(const a of d.featured_text){
+      h += '<div class="qa other"><div class="q">'+esc(a.label)+'</div>'
+         + '<div class="a">'+esc(a.value)+'</div></div>';
+    }
+    h += '</div>';
+  }
+
   if(d.completed){
     h += '<div class="card"><h2>Survey answers ('+ (d.answers?d.answers.length:0) +')</h2>';
     if(d.answers && d.answers.length){
