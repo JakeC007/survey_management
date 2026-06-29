@@ -73,7 +73,10 @@ Read live from `..\data\participant_tracker_auto.xlsx` (and the payment files):
   Fraud tag on the payment card is the number of completers whose `cid` or survey
   IP is on the blacklist and who will not be paid (distinct from Hold). The Hold
   count also includes completers whose delivery email is on a known
-  throwaway/disposable domain, held for review rather than auto-paid.
+  throwaway/disposable domain, held for review rather than auto-paid. Reviewing a
+  flagged person in `examine_indv/` updates these live: a **keep** moves them from
+  the Hold sheet to the Pay sheet (Hold drops, Pay rises) and a **fraud** mark
+  moves them to the Fraud sheet, both without waiting for a payment re-run.
 
 ## File locking / running things at once
 

@@ -429,10 +429,12 @@ steps you Back/Next through every participant carrying quality flags
 (`n_flags > 0` in `payment_tracker.xlsx`), minus anyone already `FRAUD` or already
 cleared, so you can work the flagged backlog one at a time instead of searching by
 name. Each item offers the same **Mark as fraud** action plus **Clear / keep**,
-which records a "reviewed, not fraud" decision in a new `data/review_state.csv` so
-the person drops out of the queue. Clearing does not change payment status; it
-only removes them from the review backlog, and because `review_state.csv` is a
-fresh file nothing else touches, it can never collide with an open workbook.
+which judges the person legitimate and moves them from **Hold** to **Pay**: it
+sets `exclude_recommended=no` in `payment_tracker.xlsx`, moves the row to the Pay
+sheet of `payment_report_unpaid.xlsx` (so the dashboard's Hold count drops and Pay
+rises immediately), and records the keep in a new `data/review_state.csv`. The
+xlsx writes reuse the same atomic save and Excel-lock guard as Mark-as-fraud, so a
+keep is never half-applied.
 
 **Where this sits in the pipeline.** `examine_indv` is a manual review layer that
 sits *after* the three automated stages and *alongside* payout. Step 1
@@ -445,11 +447,13 @@ unpaid card report. Those quality flags are exactly what fills the review queue.
 A human then uses `examine_indv` to convert ambiguous flagged rows into a clear
 decision: **fraud** (feeds back into `fraud_blacklist.csv` and
 `payment_tracker.xlsx`, so the next `manage_payments.py` run and the dashboard
-both honor it) or **keep** (logged in `review_state.csv`, leaving the person
-eligible and out of the backlog). Both decisions are durable across pipeline
-re-runs — fraud because the pipeline rebuilds its verdict from the blacklist
-every run, keep because the queue reads `review_state.csv` fresh each load. See
-`examine_indv/README.md` for details.
+both honor it) or **keep** (moves the person Hold → Pay in
+`payment_tracker.xlsx` and `payment_report_unpaid.xlsx`, and records the decision
+in `review_state.csv`). Both decisions are durable across pipeline re-runs: fraud
+because the pipeline rebuilds its verdict from the blacklist every run, keep
+because `manage_payments.py` reads `review_state.csv` at startup and forces those
+cids out of Hold (`load_kept_cids` / `is_held`), mirroring how the blacklist
+forces cids into Fraud. See `examine_indv/README.md` for details.
 
 
 ## Fraud screening (consent + payment)

@@ -59,6 +59,22 @@ Fraud takes priority: a blacklisted row never appears in Pay or Hold, even if it
 would otherwise be clean. If a fraud-matched person is *already* marked paid, the
 run prints a loud warning so you can stop or claw back the card.
 
+### Reviewer "keep" override (`../data/review_state.csv`)
+
+The review queue in `examine_indv/` lets a human step through every flagged
+completer and either mark them fraud or **keep** them. A keep is recorded in
+**`../data/review_state.csv`** (`cid, decision=cleared, …`). At startup
+`manage_payments.py` loads those cids (`load_kept_cids`) and `is_held()` forces
+them out of Hold into Pay — so a kept completer stays payable no matter how many
+times the build re-runs and re-computes quality flags. This is the Hold-side
+mirror of the fraud blacklist: the blacklist forces cids *into* Fraud, the keep
+list forces cids *out of* Hold. It never overrides Fraud (fraud is decided first)
+and never moves anyone *into* Hold. The file is plain CSV and hand-editable;
+remove a row (or add one with a non-`cleared` decision) to send a person back to
+normal Hold/Pay evaluation. `examine_indv` also moves the row Hold → Pay in
+`payment_report_unpaid.xlsx` at clear time, so the dashboard reflects it without
+waiting for the next build.
+
 ### The fraud blacklist (`../data/fraud_blacklist.csv`)
 
 Columns: `response_id, ip, child_name, delivery_email, reasons, source, added_at`.
