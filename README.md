@@ -131,13 +131,15 @@ survey_management/
 │   ├── quality_config.json      Vendored copy of the shared thresholds.
 │   └── README.md                Payment workflow details.
 │
-├── examine_indv/               Look up ONE participant and read their answers.
+├── examine_indv/               Look up ONE participant, or review the flagged queue.
 │   ├── examine_app.py          Local web app: search by name/RID/email, see
 │   │                           status (PAY/HOLD/FRAUD/PAID) + reason + answers,
-│   │                           and a "Mark as fraud" button.
+│   │                           a "Mark as fraud" button, and a /review queue.
 │   ├── examine_data.py         Read-only data layer.
-│   ├── examine_write.py        The only writer: "Mark as fraud" updates the
+│   ├── examine_write.py        Fraud writer: "Mark as fraud" updates the
 │   │                           blacklist, payment_tracker, and unpaid report.
+│   ├── examine_review.py       Review queue: Back/Next through flagged people +
+│   │                           "Clear / keep" (writes data/review_state.csv).
 │   ├── launch.sh / launch.bat  Launchers.
 │   └── README.md               How it works and how to run it.
 │
@@ -415,12 +417,38 @@ It reads the same files the pipeline writes (`participant_tracker_auto.xlsx`,
 `ingest/`). Status precedence and the fraud-blacklist cross-check mirror the
 payment pipeline.
 
-It is read-only except for one explicit action: a **Mark as fraud** button on
-the detail view. After a confirmation popup it appends to `fraud_blacklist.csv`
-(the source the payment pipeline reads), sets `fraud=yes` in
+It is read-only except for two explicit actions. The first is a **Mark as fraud**
+button on the detail view. After a confirmation popup it appends to
+`fraud_blacklist.csv` (the source the payment pipeline reads), sets `fraud=yes` in
 `payment_tracker.xlsx`, and moves the person into the Fraud sheet of
 `payment_report_unpaid.xlsx`, so the change is durable and the dashboard reflects
-it. Writes are atomic and idempotent; close those workbooks in Excel first. See
+it. Writes are atomic and idempotent; close those workbooks in Excel first.
+
+The second is the **Review queue** (`/review`, linked from the search page). It
+steps you Back/Next through every participant carrying quality flags
+(`n_flags > 0` in `payment_tracker.xlsx`), minus anyone already `FRAUD` or already
+cleared, so you can work the flagged backlog one at a time instead of searching by
+name. Each item offers the same **Mark as fraud** action plus **Clear / keep**,
+which records a "reviewed, not fraud" decision in a new `data/review_state.csv` so
+the person drops out of the queue. Clearing does not change payment status; it
+only removes them from the review backlog, and because `review_state.csv` is a
+fresh file nothing else touches, it can never collide with an open workbook.
+
+**Where this sits in the pipeline.** `examine_indv` is a manual review layer that
+sits *after* the three automated stages and *alongside* payout. Step 1
+(`consent_management/`) builds `fraud_blacklist.csv` from bot/fraud-farm
+detection at consent time. Step 3 (`payment_management/manage_payments.py`) runs
+the quality filter over the response export, and upserts `payment_tracker.xlsx`
+with the `n_flags` / `flag_reasons` / `exclude_recommended` columns plus the
+unpaid card report. Those quality flags are exactly what fills the review queue.
+
+A human then uses `examine_indv` to convert ambiguous flagged rows into a clear
+decision: **fraud** (feeds back into `fraud_blacklist.csv` and
+`payment_tracker.xlsx`, so the next `manage_payments.py` run and the dashboard
+both honor it) or **keep** (logged in `review_state.csv`, leaving the person
+eligible and out of the backlog). Both decisions are durable across pipeline
+re-runs — fraud because the pipeline rebuilds its verdict from the blacklist
+every run, keep because the queue reads `review_state.csv` fresh each load. See
 `examine_indv/README.md` for details.
 
 
