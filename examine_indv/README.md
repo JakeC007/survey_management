@@ -2,8 +2,11 @@
 
 A small web tool for examining a single survey participant. Use it when you want
 to understand one person (their answers, why they're being paid or held), not
-when you want to run a batch. It is read-only **except** for one explicit action:
-the "Mark as fraud" button (see below).
+when you want to run a batch. It also has a **Review queue** for stepping through
+every flagged participant one at a time (see below).
+
+It is read-only **except** for two explicit actions: the "Mark as fraud" button
+and the "Clear / keep" button in the review queue. Both are described below.
 
 ## Run it
 
@@ -64,6 +67,41 @@ is owned by the consent/response pipeline, and the dashboard's separate
 "Flagged as fraud" card counts consent-time bot detections, which is a different
 thing from a manual payment-side fraud mark.
 
+## Review flagged participants (the Back / Next queue)
+
+The link at the top of the search page (or `/review` directly) opens a review
+queue for working through everyone who carries quality flags, one at a time,
+instead of searching for them by name. Use it when you want to clear a backlog of
+flagged responses and make a fraud-or-keep call on each.
+
+**Who's in the queue.** Every participant with `n_flags > 0` in
+`payment_tracker.xlsx`, **minus** anyone already marked `FRAUD` and anyone you've
+already cleared here. Most-flagged appear first; a "hide already-paid" toggle
+drops people who have already been paid. The queue is rebuilt from disk on every
+load, so it always reflects the current sheets.
+
+**Navigation.** Back / Next buttons (or the ← / → arrow keys) move between items.
+A counter and progress bar show where you are. Each item shows the same status,
+reason, metadata, and answers as the search detail view, plus the specific
+`flag_reasons` that put the person in the queue.
+
+**Two decisions per item:**
+
+- **Mark as fraud** — identical to the search-view button above; routes through
+  `examine_write.mark_fraud` and writes the three fraud files. The person leaves
+  the queue (they're now `FRAUD`).
+- **Clear / keep** — records a "reviewed, not fraud" decision so the person drops
+  out of the queue and never resurfaces. It writes a single row to
+  **`data/review_state.csv`** (`decision=cleared`). It does **not** change the
+  person's payment status — it only removes them from *this* review backlog.
+
+`review_state.csv` is a **new file that nothing else in the pipeline reads or
+writes**, so a clear can never collide with an open Excel workbook. Writes are
+atomic (temp file + `os.replace`, with `fsync`) and idempotent (re-clearing an
+already-cleared person is a no-op). All queue and clear logic lives in
+`examine_review.py`; the server reuses the existing `STORE` and the same
+`/api/detail` and `/api/mark_fraud` endpoints.
+
 ## How the data joins (important for future edits)
 
 The join key everywhere is the **consent ResponseId**:
@@ -74,8 +112,10 @@ participant_tracker_auto.response_id  ==  payment_tracker.cid  ==  survey export
 
 Note the survey export's own `ResponseId` column is a *different* id and is **not**
 the join key — use the embedded `cid` column (near the end of the export, around
-column 144). All logic lives in `examine_data.py`; the server (`examine_app.py`)
-is a thin stdlib `http.server` wrapper that serves JSON and one HTML page.
+column 144). Read logic lives in `examine_data.py`, the fraud writer in
+`examine_write.py`, and the review queue + clear logic in `examine_review.py`.
+The server (`examine_app.py`) is a thin stdlib `http.server` wrapper that serves
+JSON and two HTML pages (the search page and `/review`).
 
 ### Files read (all under the repo root, one level up)
 
@@ -84,6 +124,7 @@ is a thin stdlib `http.server` wrapper that serves JSON and one HTML page.
 | `data/participant_tracker_auto.xlsx` (Participants sheet) | the roster / who exists |
 | `data/payment_tracker.xlsx` (Payments sheet, by `cid`) | PAY/HOLD/FRAUD/PAID decision + reasons |
 | `data/fraud_blacklist.csv` | fraud cross-check by RID, email, or IP |
+| `data/review_state.csv` | "cleared / keep" decisions from the review queue (created on first clear) |
 | newest `ingest/K12 *.zip` (not the `Consent …` zips) | the actual answers |
 
 The newest survey ZIP is chosen by parsing the date in the filename

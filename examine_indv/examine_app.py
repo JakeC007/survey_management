@@ -30,6 +30,7 @@ from urllib.parse import urlparse, parse_qs
 
 import examine_data
 import examine_write
+import examine_review
 
 HOST = "127.0.0.1"
 PORT = 8765
@@ -144,6 +145,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <header>
   <h1>Examine a participant</h1>
   <div class="sub">Search the participant tracker, confirm survey completion, and read their answers with payment status.</div>
+  <div style="margin-top:10px"><a href="/review" style="color:var(--accent);font-size:13.5px;font-weight:600;text-decoration:none">→ Review flagged participants (Back / Next queue)</a></div>
 </header>
 <div class="wrap">
   <div class="searchbar">
@@ -349,6 +351,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, INDEX_HTML, "text/html; charset=utf-8")
             return
 
+        if path == "/review":
+            self._send(200, examine_review.REVIEW_HTML, "text/html; charset=utf-8")
+            return
+
+        if path == "/api/review_queue":
+            include_paid = (qs.get("include_paid") or ["1"])[0] != "0"
+            try:
+                self._json(examine_review.build_queue(STORE, include_paid=include_paid))
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": f"review_queue failed: {e}"}, 500)
+            return
+
         if path == "/api/search":
             q = (qs.get("q") or [""])[0]
             try:
@@ -372,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         global STORE
         parsed = urlparse(self.path)
-        if parsed.path != "/api/mark_fraud":
+        if parsed.path not in ("/api/mark_fraud", "/api/clear_review"):
             self._send(404, "not found", "text/plain; charset=utf-8")
             return
         try:
@@ -383,10 +397,21 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         rid = (body.get("rid") or "").strip()
-        reason = (body.get("reason") or "").strip()
         if not rid:
             self._json({"error": "missing rid"}, 400)
             return
+
+        if parsed.path == "/api/clear_review":
+            note = (body.get("note") or "").strip()
+            try:
+                result = examine_review.clear_item(STORE, rid, note)
+                self._json({"result": result})
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": f"clear_review failed: {e}"}, 500)
+            return
+
+        # /api/mark_fraud
+        reason = (body.get("reason") or "").strip()
         try:
             result = examine_write.mark_fraud(STORE, rid, reason)
             # reload data so the (now fraud) status is reflected everywhere
