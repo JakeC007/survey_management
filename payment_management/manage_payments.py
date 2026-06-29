@@ -135,6 +135,17 @@ REPORT_PATH = REPO_ROOT / "data" / "payment_report_unpaid.xlsx"
 # screen. One row per fraudulent consent Response ID + the IP it came from.
 FRAUD_BLACKLIST_PATH = REPO_ROOT / "data" / "fraud_blacklist.csv"
 
+# Manual "keep" decisions made in examine_indv's review queue. A reviewer who
+# looks at a flagged completer and judges them legitimate records a cid here
+# (decision=cleared). We honour that by forcing the cid OUT of the Hold bucket
+# and into Pay, so a human keep survives every re-run of this script. It never
+# overrides Fraud (fraud is decided before Hold/Pay split). Written by
+# examine_indv/examine_review.py.
+REVIEW_STATE_PATH = REPO_ROOT / "data" / "review_state.csv"
+
+# Populated in main() from REVIEW_STATE_PATH; used by is_held().
+KEPT_CIDS: set = set()
+
 # Known throwaway / disposable email domains (public maintained list + curated
 # additions) and a whitelist of real institution domains never to treat as
 # disposable. A completer whose delivery email is on the throwaway list is
@@ -498,8 +509,37 @@ def is_fraud(row: dict) -> bool:
     return str(row.get("fraud", "no")).strip().lower() == "yes"
 
 
+def load_kept_cids() -> set:
+    """Read review_state.csv -> set of cids a reviewer explicitly kept.
+
+    Later rows win, so a cid can be cleared then later un-cleared. Tolerant of a
+    missing/half-written file (returns what it can, never raises)."""
+    kept: set = set()
+    if not REVIEW_STATE_PATH.exists():
+        return kept
+    try:
+        import csv as _csv
+        with open(REVIEW_STATE_PATH, newline="", encoding="utf-8-sig") as f:
+            for r in _csv.DictReader(f):
+                cid = str(r.get("cid", "")).strip()
+                if not cid:
+                    continue
+                if str(r.get("decision", "")).strip().lower() == "cleared":
+                    kept.add(cid)
+                else:
+                    kept.discard(cid)
+    except OSError:
+        pass
+    return kept
+
+
 def is_held(row: dict) -> bool:
     """Whether this payable row belongs in the Hold bucket."""
+    # A reviewer who explicitly KEPT this completer in examine_indv overrides
+    # every hold rule below (including throwaway-email): the human looked and
+    # judged them legitimate, so they go to Pay and stay there on re-runs.
+    if str(row.get("cid", "")).strip() in KEPT_CIDS:
+        return False
     # A throwaway delivery email always holds for review, independent of the
     # quality-flag switches below: we never auto-send a card to one.
     if str(row.get("throwaway_email", "no")).strip().lower() == "yes":
