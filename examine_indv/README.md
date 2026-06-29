@@ -90,17 +90,36 @@ reason, metadata, and answers as the search detail view, plus the specific
 - **Mark as fraud** — identical to the search-view button above; routes through
   `examine_write.mark_fraud` and writes the three fraud files. The person leaves
   the queue (they're now `FRAUD`).
-- **Clear / keep** — records a "reviewed, not fraud" decision so the person drops
-  out of the queue and never resurfaces. It writes a single row to
-  **`data/review_state.csv`** (`decision=cleared`). It does **not** change the
-  person's payment status — it only removes them from *this* review backlog.
+- **Clear / keep** — judges the person legitimate and moves them from **Hold** to
+  **Pay**, so the dashboard's Hold count drops and Pay count rises. Like
+  Mark-as-fraud, it writes to every place that matters:
 
-`review_state.csv` is a **new file that nothing else in the pipeline reads or
-writes**, so a clear can never collide with an open Excel workbook. Writes are
-atomic (temp file + `os.replace`, with `fsync`) and idempotent (re-clearing an
-already-cleared person is a no-op). All queue and clear logic lives in
-`examine_review.py`; the server reuses the existing `STORE` and the same
-`/api/detail` and `/api/mark_fraud` endpoints.
+  1. **`data/payment_tracker.xlsx`** — sets `exclude_recommended=no` and stamps a
+     `kept via examine_indv review` note on the row, so they read as `PAY`.
+  2. **`data/payment_report_unpaid.xlsx`** — moves the row from the
+     `Hold (flagged)` sheet to the `Pay (no hold)` sheet, so the dashboard counts
+     (which are sheet sizes) update immediately, without a pipeline run.
+  3. **`data/review_state.csv`** — records the keep (`decision=cleared`), which
+     drops the person from this queue **and** makes the next `manage_payments.py`
+     run keep them in Pay (see below).
+
+  Marking does not touch their `fraud` flag and never moves anyone *into* Hold.
+
+**Durable across pipeline re-runs.** `manage_payments.py` recomputes the Hold/Pay
+split from quality flags every run, so a one-off edit to `payment_tracker.xlsx`
+would be undone on the next build. To make a keep stick, `manage_payments.py`
+reads `review_state.csv` at startup (`load_kept_cids`) and forces those cids out
+of Hold in `is_held()` — the same way the fraud blacklist forces cids into Fraud.
+So a kept person stays in Pay no matter how many times the pipeline re-runs.
+
+`review_state.csv` is **only read by the review queue and `manage_payments.py`,
+and only written here**, so a clear's CSV write can never collide with an open
+Excel workbook. The two xlsx writes reuse `examine_write`'s atomic save and the
+same Excel-lock guard as Mark-as-fraud: if a workbook is open in Excel the keep
+is **not** half-applied — nothing is recorded and you get a clear "close it and
+retry" message. Re-clearing an already-cleared person is a no-op. All queue and
+clear logic lives in `examine_review.py`; the server reuses the existing `STORE`
+and the same `/api/detail` and `/api/mark_fraud` endpoints.
 
 ## How the data joins (important for future edits)
 

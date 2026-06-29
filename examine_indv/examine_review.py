@@ -40,11 +40,17 @@ import os
 import csv
 import datetime as dt
 
+import openpyxl
+
 import examine_data as ed
+import examine_write as ew
 
 
 REVIEW_STATE_CSV = os.path.join(ed.DATA, "review_state.csv")
 REVIEW_HEADER = ["cid", "decision", "note", "reviewed_by", "reviewed_at"]
+
+PAYMENT_XLSX = ed.PAYMENT_XLSX
+REPORT_XLSX = os.path.join(ed.DATA, "payment_report_unpaid.xlsx")
 
 
 def _now() -> str:
@@ -80,13 +86,155 @@ def load_cleared() -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# payment_tracker.xlsx  (flip the kept person out of Hold)
+# --------------------------------------------------------------------------- #
+def _keep_in_payment_tracker(rid, note):
+    """Set exclude_recommended=no and stamp a note on the person's ledger row,
+    so they read as PAY (not HOLD) and a re-run preserves the human decision.
+    Returns (message_or_None, changed_bool). Idempotent."""
+    if not os.path.exists(PAYMENT_XLSX):
+        return None, False
+    wb = openpyxl.load_workbook(PAYMENT_XLSX)
+    ws = wb["Payments"] if "Payments" in wb.sheetnames else wb.worksheets[0]
+    hdr = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+    col = {name: i for i, name in enumerate(hdr)}
+    if "cid" not in col:
+        wb.close()
+        return None, False
+    cid_i = col["cid"]
+    target = None
+    for row in ws.iter_rows(min_row=2):
+        if cid_i < len(row) and str(row[cid_i].value).strip() == rid:
+            target = row
+            break
+    if target is None:
+        wb.close()
+        return None, False
+
+    stamp = "kept via examine_indv review" + (f": {note}" if note else "")
+    changed = False
+
+    if "exclude_recommended" in col:
+        cell = target[col["exclude_recommended"]]
+        if str(cell.value or "").strip().lower() == "yes":
+            cell.value = "no"
+            changed = True
+    if "notes" in col:
+        existing = str(target[col["notes"]].value or "").strip()
+        if "kept via examine_indv review" not in existing:  # don't stack on re-clear
+            target[col["notes"]].value = stamp if not existing else f"{existing}; {stamp}"
+            changed = True
+
+    if changed:
+        ew._atomic_save(wb, PAYMENT_XLSX)
+    wb.close()
+    return ("payment_tracker.xlsx (exclude_recommended=no)" if changed
+            else "payment_tracker.xlsx (already not held)"), changed
+
+
+# --------------------------------------------------------------------------- #
+# payment_report_unpaid.xlsx  (move the row from the Hold sheet to the Pay sheet)
+# --------------------------------------------------------------------------- #
+def _hdr_of(ws):
+    return [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+
+
+def _move_report_hold_to_pay(rid):
+    """Move the person's row from the 'Hold' sheet to the 'Pay' sheet so the
+    dashboard's Hold count drops and Pay count rises immediately. Returns
+    (changed_list, skipped_list)."""
+    if not os.path.exists(REPORT_XLSX):
+        return [], ["payment_report_unpaid.xlsx (not found - will sort out on next pipeline run)"]
+    wb = openpyxl.load_workbook(REPORT_XLSX)
+
+    hold = pay = None  # (sheet_name, worksheet)
+    for sn in wb.sheetnames:
+        low = sn.lower()
+        if low.startswith("hold"):
+            hold = (sn, wb[sn])
+        elif low.startswith("pay"):
+            pay = (sn, wb[sn])
+    if hold is None or pay is None:
+        wb.close()
+        return [], ["payment_report_unpaid.xlsx (Pay/Hold sheet not found)"]
+
+    hsn, hws = hold
+    psn, pws = pay
+    hhdr = _hdr_of(hws)
+    if "cid" not in hhdr:
+        wb.close()
+        return [], ["payment_report_unpaid.xlsx (no cid column in Hold sheet)"]
+    hci = hhdr.index("cid")
+
+    captured, del_rows = None, []
+    for r in hws.iter_rows(min_row=2):
+        if hci < len(r) and str(r[hci].value).strip() == rid:
+            captured = {hhdr[i]: (r[i].value if i < len(r) else None) for i in range(len(hhdr))}
+            del_rows.append(r[0].row)
+
+    if captured is None:
+        # Not in Hold - maybe they were already in Pay (flagged but not held).
+        phdr = _hdr_of(pws)
+        pci = phdr.index("cid") if "cid" in phdr else None
+        in_pay = pci is not None and any(
+            pci < len(r) and str(r[pci].value).strip() == rid
+            for r in pws.iter_rows(min_row=2))
+        wb.close()
+        return [], ["payment_report_unpaid.xlsx (already in Pay)" if in_pay
+                    else "payment_report_unpaid.xlsx (not in Hold sheet)"]
+
+    for ridx in sorted(del_rows, reverse=True):
+        hws.delete_rows(ridx, 1)
+    phdr = _hdr_of(pws)
+    pws.append([captured.get(h, "") for h in phdr])
+    ew._atomic_save(wb, REPORT_XLSX)
+    wb.close()
+    return [f"payment_report_unpaid.xlsx (moved '{hsn}' -> '{psn}')"], []
+
+
+# --------------------------------------------------------------------------- #
 # review_state.csv  (write, atomic + idempotent)
 # --------------------------------------------------------------------------- #
-def clear_item(store, response_id, note: str = "", reviewed_by: str = "") -> dict:
-    """Record a 'cleared / keep' decision for one participant.
+def _append_review_state(rid, note, reviewed_by):
+    """Atomic, idempotent append of a 'cleared' row. Raises on lock/IO so the
+    caller can surface it."""
+    new_file = not os.path.exists(REVIEW_STATE_CSV) or os.path.getsize(REVIEW_STATE_CSV) == 0
+    existing = b""
+    if not new_file:
+        with open(REVIEW_STATE_CSV, "rb") as f:
+            existing = f.read()
+        if existing and existing[-1:] not in (b"\n", b"\r"):
+            existing += b"\n"
 
-    Appends a row to data/review_state.csv. No-op if the cid is already
-    cleared. Returns {ok, rid, changed/skipped, error?}.
+    import io
+    sbuf = io.StringIO()
+    w = csv.writer(sbuf)
+    if new_file:
+        w.writerow(REVIEW_HEADER)
+    w.writerow([rid, "cleared", note, reviewed_by, _now()])
+    new_bytes = existing + sbuf.getvalue().encode("utf-8")
+
+    tmp = REVIEW_STATE_CSV + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(new_bytes)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, REVIEW_STATE_CSV)
+
+
+def clear_item(store, response_id, note: str = "", reviewed_by: str = "") -> dict:
+    """Record a 'cleared / keep' decision and move the person Hold -> Pay.
+
+    Three durable effects (mirrors mark_fraud's multi-file write):
+      1. payment_tracker.xlsx  -> exclude_recommended=no (+ note), so they read PAY.
+      2. payment_report_unpaid.xlsx -> moved from the Hold sheet to the Pay sheet,
+         so the dashboard's Hold count drops and Pay count rises right away.
+      3. review_state.csv -> records the keep, drops them from the review queue,
+         and makes the next manage_payments run keep them in Pay (KEPT_CIDS).
+
+    No-op if already cleared. If a workbook is locked open in Excel, nothing is
+    recorded and a clear error is returned, so the reviewer can close it and
+    retry (the keep is not half-applied).
     """
     rid = ed._s(response_id)
     if not rid:
@@ -96,44 +244,50 @@ def clear_item(store, response_id, note: str = "", reviewed_by: str = "") -> dic
     if rid not in store.tracker_by_rid:
         return {"ok": False, "error": f"No participant found for {rid!r}."}
 
-    already = load_cleared()
-    if rid in already:
-        return {"ok": True, "rid": rid, "skipped": ["already cleared"], "changed": []}
+    if rid in load_cleared():
+        return {"ok": True, "rid": rid, "skipped": ["already cleared"], "changed": [], "errors": []}
 
     note = ed._s(note)
     reviewed_by = ed._s(reviewed_by)
+    changed, skipped, errors = [], [], []
 
-    new_file = not os.path.exists(REVIEW_STATE_CSV) or os.path.getsize(REVIEW_STATE_CSV) == 0
-
+    # 1. payment_tracker.xlsx  (flip exclude_recommended)
     try:
-        # Atomic: read existing bytes, append in memory, write temp, replace.
-        existing = b""
-        if not new_file:
-            with open(REVIEW_STATE_CSV, "rb") as f:
-                existing = f.read()
-            if existing and existing[-1:] not in (b"\n", b"\r"):
-                existing += b"\n"
-
-        import io
-        sbuf = io.StringIO()
-        w = csv.writer(sbuf)
-        if new_file:
-            w.writerow(REVIEW_HEADER)
-        w.writerow([rid, "cleared", note, reviewed_by, _now()])
-        new_bytes = existing + sbuf.getvalue().encode("utf-8")
-
-        tmp = REVIEW_STATE_CSV + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(new_bytes)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, REVIEW_STATE_CSV)
+        msg, did = _keep_in_payment_tracker(rid, note)
+        if msg is None:
+            skipped.append("payment_tracker.xlsx (no matching row)")
+        else:
+            (changed if did else skipped).append(msg)
     except PermissionError:
-        return {"ok": False, "error": "review_state.csv is open/locked - close it and try again"}
-    except OSError as e:
-        return {"ok": False, "error": f"review_state.csv: {e}"}
+        errors.append("payment_tracker.xlsx is open in Excel - close it and try again")
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"payment_tracker.xlsx: {e}")
 
-    return {"ok": True, "rid": rid, "changed": ["review_state.csv (cleared)"], "skipped": []}
+    # 2. payment_report_unpaid.xlsx  (move Hold -> Pay) - only if step 1 was clean
+    if not errors:
+        try:
+            ch, sk = _move_report_hold_to_pay(rid)
+            changed.extend(ch)
+            skipped.extend(sk)
+        except PermissionError:
+            errors.append("payment_report_unpaid.xlsx is open in Excel - close it and try again")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"payment_report_unpaid.xlsx: {e}")
+
+    # If a workbook was locked, don't record the keep - let the user retry clean.
+    if errors:
+        return {"ok": False, "rid": rid, "changed": changed, "skipped": skipped, "errors": errors}
+
+    # 3. review_state.csv  (the durable keep record + queue drop)
+    try:
+        _append_review_state(rid, note, reviewed_by)
+        changed.append("review_state.csv (cleared)")
+    except PermissionError:
+        errors.append("review_state.csv is open/locked - close it and try again")
+    except OSError as e:
+        errors.append(f"review_state.csv: {e}")
+
+    return {"ok": not errors, "rid": rid, "changed": changed, "skipped": skipped, "errors": errors}
 
 
 # --------------------------------------------------------------------------- #
@@ -460,8 +614,10 @@ function openKeepModal(){
     + '<p>'+esc(p.child_name||p.response_id)+' ('+esc(p.delivery_email||'no email')+') · '+esc(p.response_id)+'</p>'
     + '<label class="k" style="color:var(--muted);font-size:12px">Note (optional)</label>'
     + '<textarea id="reason" placeholder="e.g. reviewed answers, looks legitimate"></textarea>'
-    + '<div class="what">Records a reviewed/keep decision in <b>review_state.csv</b> so this person drops out of '
-    + 'the review queue. It does <b>not</b> change their payment status.</div>'
+    + '<div class="what">Moves this person from <b>Hold</b> to <b>Pay</b>: sets <b>exclude_recommended=no</b> in '
+    + 'payment_tracker.xlsx, moves them to the Pay sheet of payment_report_unpaid.xlsx (the dashboard Hold count '
+    + 'drops, Pay rises), and records the keep in <b>review_state.csv</b> so they leave the queue and stay in Pay '
+    + 'on the next pipeline run.</div>'
     + '<div class="modal-actions"><button class="btn-ghost" onclick="closeModal()">Cancel</button>'
     + '<button class="btn-confirm keep" id="go" onclick="confirmKeep()">Clear / keep</button></div>'
     + '</div></div>';
@@ -502,7 +658,10 @@ async function confirmKeep(){
   if(res.error){ toast(false, esc(res.error)); return; }
   const r = res.result||{};
   if(!r.ok){ toast(false, esc((r.errors&&r.errors[0])||r.error||'could not clear')); return; }
-  toast(true, '<b>Cleared.</b> Dropped from the review queue.');
+  let msg = '<b>Cleared / kept.</b> Moved to Pay and dropped from the queue.';
+  const changed = r.changed||[];
+  if(changed.length) msg += '<ul>'+changed.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
+  toast(true, msg);
   dropCurrentAndAdvance();
 }
 

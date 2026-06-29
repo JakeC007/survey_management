@@ -662,6 +662,14 @@ def main():
         print(f"Fraud blacklist: none found at {FRAUD_BLACKLIST_PATH.name} "
               f"(no fraud screening yet)\n")
 
+    # Honour manual "keep" decisions from examine_indv's review queue: these
+    # cids are forced out of Hold into Pay (see is_held / load_kept_cids).
+    global KEPT_CIDS
+    KEPT_CIDS = load_kept_cids()
+    if KEPT_CIDS:
+        print(f"Reviewer keeps : {len(KEPT_CIDS)} cid(s) kept in Pay "
+              f"({REVIEW_STATE_PATH.name})\n")
+
     tracker_df = load_tracker()
 
     export_path = find_response_export(args.export)
