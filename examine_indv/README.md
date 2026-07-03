@@ -8,6 +8,12 @@ every flagged participant one at a time (see below).
 It is read-only **except** for two explicit actions: the "Mark as fraud" button
 and the "Clear / keep" button in the review queue. Both are described below.
 
+This tool is for one person at a time. To actually **pay** completed
+participants in a batch — copy their emails into Amazon, mark them paid, and send
+the thank-you email — use the payment console `payment_management/pay_app.py`
+(`run_pay_app.bat`). If you mark someone paid there and later mark them fraud
+here, the fraud flag stands; review before clawing back an already-sent card.
+
 ## Run it
 
 ```

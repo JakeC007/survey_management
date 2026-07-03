@@ -101,6 +101,51 @@ with an empty blacklist and prints that no fraud list was found.
    `data\payment_tracker.xlsx`, then save.
 4. Next run drops paid people from the report automatically.
 
+## Payment console webapp (`pay_app.py`)
+
+`pay_app.py` is a small local web app (Python stdlib + openpyxl, same shared
+venv as everything else) that drives steps 2–3 above from the browser so you
+never hand-edit the tracker. It **reimplements no payment logic** — it reads the
+`Pay (no hold)` sheet `manage_payments.py` already produced.
+
+Launch: double-click `run_pay_app.bat` (or `..\.venv\Scripts\python.exe
+pay_app.py`), then it opens `http://127.0.0.1:5001`. Classic Outlook (NOT New
+Outlook) must be open and signed in as your UChicago account for the email step;
+everything else works without it.
+
+What it does:
+
+1. **Choose who to pay.** Lists everyone payable and not yet paid. Select all,
+   filter, or paste a list of emails ("define who to pay by email") to select a
+   specific subset. People with no delivery email are shown but not selectable;
+   two participants sharing one inbox are tagged `shared inbox` and both stay
+   selectable (each still gets a card).
+2. **Copy emails into Amazon.** One click copies the selected addresses
+   (comma-separated) to your clipboard to paste into Amazon's recipient box
+   (max 999/order; the app warns if you go over). Buy + send the cards on Amazon
+   as usual.
+3. **Mark paid + email.** Click once and the app, per participant:
+   - writes `paid=yes`, `paid_date`, `paid_amount` into
+     `data\payment_tracker.xlsx` (same edit as the manual step, keyed by `cid`,
+     preserving every other cell — so `manage_payments.py` merges it back and
+     drops them from the next report);
+   - sends the personalized `$10` thank-you email via the shared Outlook mailbox
+     (tick **draft, don't send** to stage Outlook drafts for review instead);
+   - appends the result to `data\payment_email_log.csv`.
+   Large batches are processed in chunks of 40 with a progress bar, so a failure
+   part-way through still persists everyone already handled.
+4. **Paid & bookkeeping.** A second tab lists everyone paid through the console
+   with their email status, and a **Received?** checkbox you tick when a
+   participant replies "I've received my $10 gift card". That writes
+   `received_confirmed` back to `data\payment_email_log.csv`.
+
+New file it owns: **`data\payment_email_log.csv`** (`cid, first_name,
+delivery_email, paid_date, paid_amount, email_status, emailed_at,
+received_confirmed, received_confirmed_at, error`). It is kept separate from
+`payment_tracker.xlsx` on purpose, so a `manage_payments.py` rebuild never
+clobbers the email/confirmation bookkeeping. Keep both closed in Excel while the
+app writes, or it will report the file as locked and change nothing.
+
 ## Policy switches (top of `manage_payments.py`)
 
 - `HOLD_BUCKET_ENABLED` — `True` splits flagged completers into the Hold sheet.

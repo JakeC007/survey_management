@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payment console — AirLab Teen AI Survey</title>
+<style>
+  :root{
+    --maroon:#800000; --maroon-d:#5c0000; --ink:#1f2328; --muted:#6b7280;
+    --line:#e5e7eb; --bg:#f7f7f8; --card:#fff; --ok:#137333; --warn:#b45309;
+    --err:#b00020; --chip:#f3f4f6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+    color:var(--ink);background:var(--bg);font-size:14px;line-height:1.45}
+  header{background:var(--maroon);color:#fff;padding:14px 20px}
+  header h1{margin:0;font-size:17px;font-weight:600}
+  header .sub{opacity:.85;font-size:12px;margin-top:2px}
+  .wrap{max-width:1120px;margin:0 auto;padding:18px 20px 120px}
+  .cards{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 6px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;min-width:120px}
+  .stat .n{font-size:22px;font-weight:700;line-height:1}
+  .stat .l{color:var(--muted);font-size:12px;margin-top:4px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:16px;margin-top:16px}
+  h2{font-size:15px;margin:0 0 4px}
+  .hint{color:var(--muted);font-size:12.5px;margin:0 0 12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  button{font:inherit;border:1px solid var(--line);background:#fff;border-radius:8px;
+    padding:8px 12px;cursor:pointer}
+  button:hover{background:#f3f4f6}
+  button.primary{background:var(--maroon);color:#fff;border-color:var(--maroon)}
+  button.primary:hover{background:var(--maroon-d)}
+  button.ghost{background:#fff}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  input[type=text],input[type=number],textarea{font:inherit;border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px;color:var(--ink);background:#fff}
+  textarea{width:100%;resize:vertical}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);font-weight:600;position:sticky;top:0;background:#fff}
+  .tblwrap{max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  .chip{display:inline-block;background:var(--chip);border-radius:999px;padding:1px 8px;
+    font-size:11px;color:var(--muted)}
+  .chip.warn{background:#fef3c7;color:var(--warn)}
+  .chip.err{background:#fde7ea;color:var(--err)}
+  .chip.ok{background:#e6f4ea;color:var(--ok)}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  .bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);
+    padding:12px 20px;box-shadow:0 -4px 14px rgba(0,0,0,.06)}
+  .bar .wrap2{max-width:1120px;margin:0 auto;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .grow{flex:1 1 auto}
+  .muted{color:var(--muted)}
+  .toast{position:fixed;right:16px;bottom:84px;max-width:420px;background:#111;color:#fff;
+    padding:12px 14px;border-radius:10px;font-size:13px;opacity:0;transform:translateY(8px);
+    transition:.2s;pointer-events:none;white-space:pre-line}
+  .toast.show{opacity:1;transform:none}
+  .tabs{display:flex;gap:6px;margin-top:4px}
+  .tabs button{border-radius:999px}
+  .tabs button.active{background:var(--maroon);color:#fff;border-color:var(--maroon)}
+  .pill{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--chip)}
+  .hide{display:none}
+  code{background:#f3f4f6;padding:1px 5px;border-radius:5px}
+  .progress{height:6px;background:#eee;border-radius:6px;overflow:hidden;flex:1 1 160px}
+  .progress > i{display:block;height:100%;background:var(--maroon);width:0}
+  a{color:var(--maroon)}
+  .errbanner{background:#fde7ea;border:1px solid #f3b0bb;color:#7a0016;border-radius:10px;
+    padding:12px 14px;margin:14px 0 0;display:flex;gap:12px;align-items:flex-start}
+  .errbanner b{display:block;margin-bottom:2px}
+  .errbanner button{margin-left:auto;border-color:#f3b0bb}
+</style>
+</head>
+<body>
+<header>
+  <h1>Payment console</h1>
+  <div class="sub">AirLab Teen AI Survey · pay completed participants, track who's paid, send the thank-you email</div>
+</header>
+
+<div class="wrap">
+  <div class="cards" id="cards"></div>
+  <div id="errBanner" class="errbanner hide"></div>
+  <div class="tabs">
+    <button id="tabPay" class="active" onclick="showTab('pay')">Pay participants</button>
+    <button id="tabBook" onclick="showTab('book')">Paid &amp; bookkeeping</button>
+  </div>
+
+  <!-- ================= PAY TAB ================= -->
+  <section id="panelPay">
+    <div class="card">
+      <h2>1 · Choose who to pay</h2>
+      <p class="hint">The list below is everyone who completed the survey, passed screening, and hasn't been paid yet
+        (the same <b>Pay (no hold)</b> population <code>manage_payments.py</code> builds). Pick a batch, then copy their
+        emails into Amazon's recipient box.</p>
+      <div class="row" style="margin-bottom:10px">
+        <input type="text" id="search" placeholder="Filter by name or email…" oninput="renderPay()" style="min-width:240px">
+        <button class="ghost" onclick="selectAllFiltered(true)">Select all shown</button>
+        <button class="ghost" onclick="selectAllFiltered(false)">Clear selection</button>
+        <span class="muted" id="selCount">0 selected</span>
+      </div>
+      <details style="margin-bottom:10px">
+        <summary style="cursor:pointer">Define who to pay by email (paste a list)</summary>
+        <p class="hint" style="margin-top:8px">Paste the emails you want to pay (any mix of commas, spaces, or new lines).
+          Only people on the payable list can be selected; anything else is reported back to you.</p>
+        <textarea id="defineEmails" rows="4" placeholder="alex@example.com, jordan@example.com&#10;sam@example.com"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost" onclick="selectByEmails()">Select these emails</button>
+          <span class="muted" id="defineResult"></span>
+        </div>
+      </details>
+      <div class="tblwrap">
+        <table id="payTable">
+          <thead><tr>
+            <th style="width:34px"><input type="checkbox" id="headCheck" onchange="selectAllFiltered(this.checked)"></th>
+            <th>First name</th><th>Delivery email</th><th>Flags</th><th>Completed</th>
+          </tr></thead>
+          <tbody id="payBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2 · Copy emails into Amazon</h2>
+      <p class="hint">Amazon's gift-card box takes up to 999 emails separated by a comma or space. Copy your selected batch,
+        paste it into the <b>Recipient email address</b> box, set the amount to your card value, and complete the order.</p>
+      <div class="row">
+        <button class="primary" onclick="copyEmails()">Copy selected emails</button>
+        <span class="muted" id="copyInfo">0 emails</span>
+      </div>
+      <textarea id="emailOut" rows="3" class="mono" style="margin-top:10px" readonly placeholder="Selected emails appear here…"></textarea>
+      <div id="over999" class="chip warn hide" style="margin-top:8px">Over 999 recipients — Amazon caps each order at 999. Split into two batches.</div>
+    </div>
+  </section>
+
+  <!-- ================= BOOKKEEPING TAB ================= -->
+  <section id="panelBook" class="hide">
+    <div class="card">
+      <h2>Paid participants</h2>
+      <p class="hint">Everyone you've marked paid through this console. Tick <b>Received?</b> when they reply
+        “I've received my $10 gift card.” This writes to <code>data/payment_email_log.csv</code>.</p>
+      <div class="row" style="margin-bottom:8px">
+        <input type="text" id="searchBook" placeholder="Filter…" oninput="renderBook()" style="min-width:240px">
+        <span class="muted" id="bookCount"></span>
+      </div>
+      <div class="tblwrap">
+        <table>
+          <thead><tr>
+            <th>First name</th><th>Email</th><th>Paid</th><th>Amount</th><th>Email</th><th>Received?</th>
+          </tr></thead>
+          <tbody id="bookBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ================= ACTION BAR ================= -->
+<div class="bar" id="actionBar">
+  <div class="wrap2">
+    <div><b id="barCount">0</b> selected</div>
+    <div class="row">
+      <label class="muted">Amount $
+        <input type="number" id="amount" value="10" min="1" step="1" style="width:70px">
+      </label>
+      <label class="muted" title="Stage as Outlook drafts instead of sending"><input type="checkbox" id="draft"> draft, don't send</label>
+    </div>
+    <div class="grow"></div>
+    <div class="progress hide" id="prog"><i id="progBar"></i></div>
+    <button class="primary" id="markBtn" onclick="markPaid()">Mark selected paid + email</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let STATE = {payable:[], paid:[], counts:{}, config:{}};
+const SEL = new Set();          // selected cids
+const CHUNK = 40;               // participants per POST when marking paid
+
+function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),4200);}
+function showError(title, detail){
+  const b=document.getElementById('errBanner');
+  b.innerHTML = `<div><b>${esc(title)}</b><span>${esc(detail||'')}</span></div>`+
+    `<button onclick="document.getElementById('errBanner').classList.add('hide')">Dismiss</button>`;
+  b.classList.remove('hide');
+  b.scrollIntoView({behavior:'smooth',block:'center'});
+}
+function clearError(){document.getElementById('errBanner').classList.add('hide');}
+
+async function load(){
+  try{
+    const r = await fetch('/api/state'); STATE = await r.json();
+    if(STATE.error){toast('Error: '+STATE.error);return;}
+    renderCards(); renderPay(); renderBook();
+    if(!STATE.report_found) toast('payment_report_unpaid.xlsx not found — run manage_payments.py first.');
+  }catch(e){toast('Could not reach the server: '+e);}
+}
+
+function renderCards(){
+  const c = STATE.counts||{};
+  const cards = [
+    ['Payable, unpaid', c.payable, ''],
+    ['Paid via app', c.paid_via_app, ''],
+    ['Emailed', c.emailed_ok, ''],
+    ['Email failed', c.email_failed, c.email_failed? 'err':''],
+    ['Confirmed', c.confirmed, ''],
+  ];
+  document.getElementById('cards').innerHTML = cards.map(([l,n,cls])=>
+    `<div class="stat"><div class="n" style="${cls==='err'&&n?'color:var(--err)':''}">${n??'—'}</div><div class="l">${l}</div></div>`).join('');
+}
+
+function filteredPay(){
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  if(!q) return STATE.payable;
+  return STATE.payable.filter(p =>
+    (p.first_name||'').toLowerCase().includes(q) || (p.delivery_email||'').toLowerCase().includes(q));
+}
+
+function renderPay(){
+  const rows = filteredPay();
+  document.getElementById('payBody').innerHTML = rows.map(p=>{
+    const flags = [];
+    if(p.no_email) flags.push('<span class="chip err">no email</span>');
+    if(p.dup_email) flags.push('<span class="chip warn">shared inbox</span>');
+    if(p.n_flags && Number(p.n_flags)>0) flags.push(`<span class="chip" title="${esc(p.flag_reasons)}">${esc(p.n_flags)} flag</span>`);
+    const checked = SEL.has(p.cid)?'checked':'';
+    const dis = p.no_email?'disabled title="no delivery email"':'';
+    return `<tr>
+      <td><input type="checkbox" ${checked} ${dis} onchange="toggle('${p.cid}',this.checked)"></td>
+      <td>${esc(p.first_name)}</td>
+      <td class="mono">${esc(p.delivery_email)}</td>
+      <td>${flags.join(' ')||''}</td>
+      <td class="muted">${esc((p.survey_completed_at||'').slice(0,10))}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="5" class="muted" style="padding:16px">Nobody payable right now.</td></tr>`;
+  syncSel();
+}
+
+function toggle(cid,on){on?SEL.add(cid):SEL.delete(cid);syncSel();}
+function selectAllFiltered(on){
+  filteredPay().forEach(p=>{ if(p.no_email) return; on?SEL.add(p.cid):SEL.delete(p.cid); });
+  renderPay();
+}
+function selectByEmails(){
+  const raw = document.getElementById('defineEmails').value;
+  const wanted = raw.split(/[\s,;]+/).map(s=>s.trim().toLowerCase()).filter(Boolean);
+  const byEmail = new Map(STATE.payable.map(p=>[(p.delivery_email||'').toLowerCase(), p]));
+  let hit=0; const miss=[];
+  wanted.forEach(e=>{ const p=byEmail.get(e); if(p && !p.no_email){SEL.add(p.cid);hit++;} else miss.push(e); });
+  renderPay();
+  document.getElementById('defineResult').textContent =
+    `${hit} selected` + (miss.length?` · ${miss.length} not on payable list: ${miss.slice(0,6).join(', ')}${miss.length>6?'…':''}`:'');
+}
+
+function syncSel(){
+  const n = SEL.size;
+  document.getElementById('selCount').textContent = n+' selected';
+  document.getElementById('barCount').textContent = n;
+  document.getElementById('markBtn').disabled = n===0;
+  // refresh the copy box + count
+  const emails = selectedEmails();
+  document.getElementById('emailOut').value = emails.join(', ');
+  document.getElementById('copyInfo').textContent = emails.length+' email'+(emails.length===1?'':'s');
+  document.getElementById('over999').classList.toggle('hide', emails.length<=999);
+  const shown = filteredPay().filter(p=>!p.no_email);
+  const hc = document.getElementById('headCheck');
+  hc.checked = shown.length>0 && shown.every(p=>SEL.has(p.cid));
+}
+
+function selectedEmails(){
+  const byCid = new Map(STATE.payable.map(p=>[p.cid,p]));
+  const seen = new Set(); const out=[];
+  SEL.forEach(cid=>{ const p=byCid.get(cid); if(p && p.delivery_email){ out.push(p.delivery_email); } });
+  return out; // keep duplicates: two participants sharing an inbox each get a card
+}
+
+async function copyEmails(){
+  const emails = selectedEmails();
+  if(!emails.length){toast('Select some people first.');return;}
+  const text = emails.join(', ');
+  try{ await navigator.clipboard.writeText(text); }
+  catch(e){ const t=document.getElementById('emailOut'); t.focus(); t.select(); document.execCommand('copy'); }
+  toast(`Copied ${emails.length} email${emails.length===1?'':'s'} to the clipboard. Paste into Amazon's recipient box.`);
+}
+
+async function markPaid(){
+  const cids = [...SEL];
+  if(!cids.length) return;
+  const amount = Number(document.getElementById('amount').value)||10;
+  const draft = document.getElementById('draft').checked;
+  const sendEmail = true;
+  const confirmMsg = `Mark ${cids.length} participant(s) as PAID at $${amount} and ${draft?'stage drafts for':'send'} the thank-you email?`;
+  if(!confirm(confirmMsg)) return;
+
+  clearError();
+  const btn=document.getElementById('markBtn'); btn.disabled=true;
+  const prog=document.getElementById('prog'), bar=document.getElementById('progBar');
+  prog.classList.remove('hide'); bar.style.width='0%';
+
+  let paid=0, ok=0, failed=0, aborted=false; const failList=[];
+  for(let i=0;i<cids.length;i+=CHUNK){
+    const chunk = cids.slice(i,i+CHUNK);
+    try{
+      const r = await fetch('/api/mark_paid',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({cids:chunk,amount,send_email:sendEmail,draft})});
+      const d = await r.json();
+      if(!d.ok){
+        aborted=true;
+        showError('Nothing was paid or emailed - the app could not update the ledger.',
+          (d.error||'unknown error')+'  Fix this, then click Mark selected paid + email again; your selection is kept.');
+        break;
+      }
+      paid+=d.marked_paid||0; ok+=d.emails_ok||0; failed+=d.emails_failed||0;
+      (d.failed||[]).forEach(f=>failList.push(f));
+    }catch(e){ aborted=true; showError('Network error talking to the app.', String(e)); break; }
+    bar.style.width = Math.round(Math.min(1,(i+CHUNK)/cids.length)*100)+'%';
+  }
+  if(!aborted) SEL.clear();       // keep the selection if we stopped, so a retry is one click
+  await load();
+  prog.classList.add('hide'); btn.disabled=false;
+  if(aborted) return;
+  let msg = `Marked ${paid} paid · ${ok} email${ok===1?'':'s'} ${draft?'drafted':'sent'}`;
+  if(failed){
+    msg += ` · ${failed} email${failed===1?'':'s'} FAILED`;
+    const first = failList[0];
+    showError(`${failed} thank-you email${failed===1?'':'s'} did not send.`,
+      (first?`e.g. ${first.cid}: ${first.error}. `:'')+'These people are marked paid; open the Paid & bookkeeping tab and click Resend on the failed rows (fix Outlook first).');
+  }
+  toast(msg);
+}
+
+// ---- bookkeeping ----
+function renderBook(){
+  const q = document.getElementById('searchBook').value.trim().toLowerCase();
+  let rows = STATE.paid||[];
+  if(q) rows = rows.filter(p=>(p.first_name||'').toLowerCase().includes(q)||(p.delivery_email||'').toLowerCase().includes(q));
+  document.getElementById('bookCount').textContent = `${rows.length} shown · ${STATE.counts.confirmed||0} confirmed`;
+  document.getElementById('bookBody').innerHTML = rows.map(p=>{
+    let badge = '<span class="chip">—</span>';
+    if(p.email_status==='sent') badge='<span class="chip ok">sent</span>';
+    else if(p.email_status==='draft') badge='<span class="chip">draft</span>';
+    else if(p.email_status==='failed') badge=`<span class="chip err" title="${esc(p.error)}">failed</span>`;
+    else if(p.email_status==='skipped') badge='<span class="chip">skipped</span>';
+    const resend = (p.email_status==='failed'||p.email_status==='skipped')
+      ? ` <button class="ghost" style="padding:2px 8px" onclick="resendEmail('${p.cid}')">Resend</button>` : '';
+    return `<tr>
+      <td>${esc(p.first_name)}</td>
+      <td class="mono">${esc(p.delivery_email)}</td>
+      <td class="muted">${esc(p.paid_date||'')}</td>
+      <td>$${esc(p.paid_amount||'')}</td>
+      <td>${badge}${resend}</td>
+      <td><input type="checkbox" ${p.received_confirmed?'checked':''} onchange="confirmRcv('${p.cid}',this.checked)">
+        ${p.received_confirmed_at?`<span class="muted" style="font-size:11px"> ${esc((p.received_confirmed_at||'').slice(0,10))}</span>`:''}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" class="muted" style="padding:16px">No payments recorded yet.</td></tr>`;
+}
+
+async function resendEmail(cid){
+  clearError();
+  try{
+    const r = await fetch('/api/resend',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cid})});
+    const d = await r.json();
+    if(!d.ok){ showError('Could not resend.', d.error||''); return; }
+    await load(); showTab('book');
+    if(d.emails_ok) toast('Thank-you email resent.');
+    else showError('Resend failed again.', ((d.failed[0]||{}).error||'')+' Check that classic Outlook is open and signed in.');
+  }catch(e){ showError('Network error talking to the app.', String(e)); }
+}
+
+async function confirmRcv(cid,on){
+  try{
+    const r = await fetch('/api/confirm',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cid,confirmed:on})});
+    const d = await r.json();
+    if(!d.ok){toast('Error: '+(d.error||'')); }
+    // update local state without a full reload
+    const p = (STATE.paid||[]).find(x=>x.cid===cid);
+    if(p){p.received_confirmed=on;}
+    STATE.counts.confirmed = (STATE.paid||[]).filter(x=>x.received_confirmed).length;
+    renderCards(); renderBook();
+  }catch(e){toast('Network error: '+e);}
+}
+
+function showTab(which){
+  document.getElementById('panelPay').classList.toggle('hide', which!=='pay');
+  document.getElementById('panelBook').classList.toggle('hide', which!=='book');
+  document.getElementById('tabPay').classList.toggle('active', which==='pay');
+  document.getElementById('tabBook').classList.toggle('active', which==='book');
+  document.getElementById('actionBar').style.display = which==='pay'?'':'none';
+}
+
+load();
+</script>
+</body>
+</html>

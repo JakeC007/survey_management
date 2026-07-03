@@ -49,6 +49,12 @@ draft buttons drive Outlook exactly like the `.bat` files do.
 Send buttons ask for confirmation first. Output (the script's console text)
 appears in the Output panel at the bottom of the page.
 
+> **Paying people is a separate console.** This dashboard builds the unpaid
+> report (step 3, "Build report"). The actual buy-and-pay loop — copying a batch
+> of emails into Amazon, marking them paid, and sending the thank-you email —
+> lives in `payment_management/pay_app.py` (`run_pay_app.bat`,
+> `http://127.0.0.1:5001`). See `payment_management/README.md`.
+
 Drop the correct Qualtrics export ZIP in `..\ingest\` before running a step:
 the consent ZIP for step 1, the teen response ZIP for steps 2 and 3.
 

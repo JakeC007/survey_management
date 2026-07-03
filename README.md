@@ -54,7 +54,10 @@ Qualtrics response data**: it reads the same response-survey export from
 consent + completion record (merged on `cid`), upserts the payment ledger
 (`data/payment_tracker.xlsx`), and writes the unpaid report
 (`data/payment_report_unpaid.xlsx`). You then buy and send the Amazon cards by
-hand and mark people paid in the ledger.
+hand and mark people paid in the ledger. The **payment console webapp**
+(`payment_management/pay_app.py`, launched by `run_pay_app.bat`) drives that
+manual step from the browser: copy the payable batch into Amazon, then one click
+marks them paid in the ledger and sends the personalized thank-you email.
 
 ```
    consent ZIP                response ZIP                 response ZIP
@@ -100,6 +103,9 @@ survey_management/
 │   ├── payment_tracker.xlsx           Payment ledger: completions + quality flags +
 │   │                                  your hand-edited paid/paid_date columns.
 │   ├── payment_report_unpaid.xlsx     Unpaid report, split into Pay, Hold, and Fraud sheets.
+│   ├── payment_email_log.csv          Written by pay_app.py: one row per participant paid
+│   │                                  through the console, with email status + your
+│   │                                  hand-ticked gift-card receipt confirmations.
 │   ├── fraud_blacklist.csv            Blacklisted consent Response IDs + IPs (bots/scammers),
 │   │                                  written by the consent fraud screen, read by payment.
 │   ├── email_throwaway_domains.txt    Known throwaway/disposable email domains (public list +
@@ -124,6 +130,11 @@ survey_management/
 │
 ├── payment_management/          Gift-card payment: ledger + unpaid report.
 │   ├── manage_payments.py       Payment pipeline script (run THIRD).
+│   ├── pay_app.py               Payment console webapp: pick a batch, copy emails
+│   │                            into Amazon, mark paid + send the thank-you email,
+│   │                            track receipt confirmations.
+│   ├── pay_app.html             UI for pay_app.py (served locally).
+│   ├── run_pay_app.bat          Launch the payment console (http://127.0.0.1:5001).
 │   ├── test_fraud_payments.py   Unit tests for the Fraud bucket.
 │   ├── run_payments.bat         Build/refresh the ledger + report.
 │   ├── run_payments_dryrun.bat  Dry-run mode (print only, write nothing).
@@ -369,6 +380,14 @@ tracks who gets a $10 Amazon gift card. Full details in
 ..\.venv\Scripts\python manage_payments.py --dry-run   REM print only
 ..\.venv\Scripts\python manage_payments.py             REM write ledger + report
 ```
+
+3. Pay people and record it. Either hand-edit `payment_tracker.xlsx` as before,
+   or launch the **payment console** (`run_pay_app.bat`, opens
+   `http://127.0.0.1:5001`): select a batch from the Pay list, copy their emails
+   into Amazon's recipient box, buy + send the cards, then click **Mark paid +
+   email** to write the ledger and send each person the thank-you note. A
+   bookkeeping tab tracks who replied to confirm receipt. Needs classic Outlook
+   open for the email step; see `payment_management/README.md`.
 
 ### What it does
 
