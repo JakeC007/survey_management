@@ -143,22 +143,73 @@ def _esc(s):
 
 
 # -- Outlook send (mirrors consent_management/send_survey_emails.py) ----------
-_OUTLOOK = {}
+# Outlook's automation object is an out-of-process COM (STA) server, so its
+# references have *thread affinity*: a handle obtained on the thread that
+# handled the first batch cannot be reused from the thread that handles the
+# next one.  This console runs on ThreadingHTTPServer (one worker thread per
+# HTTP request), so caching a single module-global Outlook object across
+# batches raised
+#     (-2147220995, 'Object is not connected to server')  # CO_E_OBJNOTCONNECTED
+# on every row of the *second* batch.  Storing the handle per-thread means each
+# batch dispatches its own live Outlook; re-dispatching once when a call reports
+# the object has disconnected covers the case where Outlook is closed/restarted
+# mid-run.
+_OUTLOOK = threading.local()
+
+# HRESULTs that mean "the cached Outlook handle is dead, throw it away and get a
+# fresh one" (as opposed to "Outlook itself is broken").
+_OUTLOOK_DEAD_HRESULTS = frozenset((
+    -2147220995,  # 0x800401FD CO_E_OBJNOTCONNECTED  "Object is not connected to server"
+    -2147417848,  # 0x80010108 RPC_E_DISCONNECTED    "object invoked has disconnected"
+    -2147023174,  # 0x800706BA RPC_S_SERVER_UNAVAILABLE
+    -2146959355,  # 0x80080005 CO_E_SERVER_EXEC_FAILURE
+))
+
+
+def _com_init():
+    """Initialise a COM apartment on the current worker thread (no-op off
+    Windows).  ThreadingHTTPServer gives each request a fresh thread, so COM
+    must be initialised on it before any Outlook call."""
+    try:
+        import pythoncom
+        pythoncom.CoInitialize()
+    except Exception:
+        pass
+
+
+def _drop_outlook():
+    """Forget this thread's Outlook handles so the next call re-dispatches."""
+    for attr in ("app", "drafts"):
+        if hasattr(_OUTLOOK, attr):
+            delattr(_OUTLOOK, attr)
+
+
+def _com_teardown():
+    """Release Outlook handles and uninitialise COM for this worker thread."""
+    _drop_outlook()
+    try:
+        import pythoncom
+        pythoncom.CoUninitialize()
+    except Exception:
+        pass
 
 
 def _get_outlook():
     import win32com.client as win32
-    if "app" not in _OUTLOOK:
-        _OUTLOOK["app"] = win32.Dispatch("outlook.application")
-    return _OUTLOOK["app"]
+    app = getattr(_OUTLOOK, "app", None)
+    if app is None:
+        app = win32.Dispatch("outlook.application")
+        _OUTLOOK.app = app
+    return app
 
 
 def _shared_drafts_folder():
     mbx = CONFIG["shared_mailbox"]
     if not mbx:
         return None
-    if "drafts" in _OUTLOOK:
-        return _OUTLOOK["drafts"]
+    cached = getattr(_OUTLOOK, "drafts", None)
+    if cached is not None:
+        return cached
     ns = _get_outlook().GetNamespace("MAPI")
     recip = ns.CreateRecipient(mbx)
     recip.Resolve()
@@ -168,12 +219,19 @@ def _shared_drafts_folder():
             "and that the mailbox is added to your Outlook profile.")
     OL_FOLDER_DRAFTS = 16
     folder = ns.GetSharedDefaultFolder(recip, OL_FOLDER_DRAFTS)
-    _OUTLOOK["drafts"] = folder
+    _OUTLOOK.drafts = folder
     return folder
 
 
-def send_via_outlook(to_email, subject, html_body, draft_only):
-    """Send (or draft) one message. Raises on any Outlook problem."""
+def _hresult(exc):
+    """Best-effort HRESULT from a pywintypes.com_error (its first arg)."""
+    args = getattr(exc, "args", None)
+    if args and isinstance(args[0], int):
+        return args[0]
+    return None
+
+
+def _send_once(to_email, subject, html_body, draft_only):
     mail = _get_outlook().CreateItem(0)  # olMailItem
     mail.To = to_email
     mail.Subject = subject
@@ -188,6 +246,41 @@ def send_via_outlook(to_email, subject, html_body, draft_only):
             mail.Move(folder)
     else:
         mail.Send()
+
+
+def send_via_outlook(to_email, subject, html_body, draft_only):
+    """Send (or draft) one message. Raises on any Outlook problem.
+
+    If Outlook reports the cached automation object has disconnected, drop it,
+    re-dispatch a live Outlook once, and retry, so a stale handle from an
+    earlier batch doesn't fail the whole run."""
+    for attempt in (1, 2):
+        try:
+            _send_once(to_email, subject, html_body, draft_only)
+            return
+        except Exception as exc:
+            if attempt == 1 and _hresult(exc) in _OUTLOOK_DEAD_HRESULTS:
+                _drop_outlook()  # force a fresh Dispatch on the retry
+                continue
+            raise
+
+
+def _is_outlook_down(exc):
+    """True when the failure means Outlook itself is unreachable, so every
+    remaining row in the batch would fail too and we should stop retrying.
+
+    The original check only matched the strings 'outlook'/'dispatch'/'win32';
+    a raw COM error like ``(-2147220995, 'Object is not connected to server')``
+    matched none of them, so the batch kept hammering a dead handle for all 25
+    rows.  Match on the HRESULT and on connection-level messages instead."""
+    if _hresult(exc) in _OUTLOOK_DEAD_HRESULTS:
+        return True
+    text = str(exc).lower()
+    return any(k in text for k in (
+        "outlook", "dispatch", "win32", "not connected", "disconnected",
+        "rpc server", "server is unavailable", "call was rejected",
+        "co_e_", "0x8004",
+    ))
 
 
 # -- Spreadsheet helpers ------------------------------------------------------
@@ -386,11 +479,19 @@ def build_state():
         c["dup_email"] = seen_emails.get(c["delivery_email"].lower(), 0) > 1
         c["no_email"] = not c["delivery_email"]
 
-    # Paid list = everyone the app has recorded in the email log.
+    # "Paid" is defined by the ledger (payment_tracker.xlsx) - the ground truth -
+    # NOT by this app's CSV log.  The log can drift from the ledger: e.g. a batch
+    # marks people paid and logs them, then the tracker is restored from a backup,
+    # leaving log rows for people who are no longer marked paid.  Counting raw log
+    # rows used to inflate the tiles (295 "paid" / 267 "failed" while the ledger
+    # showed only 67 paid).  Only surface log rows whose cid is actually paid in
+    # the ledger; the rest are "orphans" to reconcile, reported separately so the
+    # drift is visible instead of silently miscounted.
     paid = []
+    orphans = []
     for cid, row in log.items():
         led = ledger.get(cid, {})
-        paid.append({
+        entry = {
             "cid": cid,
             "first_name": row.get("first_name") or led.get("first_name"),
             "delivery_email": row.get("delivery_email") or led.get("delivery_email"),
@@ -401,7 +502,8 @@ def build_state():
             "received_confirmed": (row.get("received_confirmed") or "").strip().lower() in ("yes", "true", "1"),
             "received_confirmed_at": row.get("received_confirmed_at"),
             "error": row.get("error"),
-        })
+        }
+        (paid if led.get("paid") else orphans).append(entry)
     paid.sort(key=lambda r: (r["received_confirmed"], (r["first_name"] or "").lower()))
 
     counts = {
@@ -410,6 +512,8 @@ def build_state():
         "emailed_ok": sum(1 for p in paid if p["email_status"] in ("sent", "draft")),
         "email_failed": sum(1 for p in paid if p["email_status"] == "failed"),
         "confirmed": sum(1 for p in paid if p["received_confirmed"]),
+        # Log rows with no matching paid flag in the tracker (needs reconciling).
+        "log_orphans": len(orphans),
     }
     return {
         "counts": counts,
@@ -451,6 +555,8 @@ def action_mark_paid(payload):
         today = datetime.now().strftime("%Y-%m-%d")
         outlook_broken = None  # cache a hard Outlook failure so we don't retry 300x
 
+        if send_email:
+            _com_init()  # initialise COM on this request thread before sending
         for cid in updated:
             led = ledger.get(cid, {})
             first = led.get("first_name") or ""
@@ -471,7 +577,7 @@ def action_mark_paid(payload):
                     except Exception as e:
                         err = str(e)
                         status = "failed"
-                        if "outlook" in err.lower() or "dispatch" in err.lower() or "win32" in err.lower():
+                        if _is_outlook_down(e):
                             outlook_broken = err
 
             prev = log.get(cid, {})
@@ -490,6 +596,8 @@ def action_mark_paid(payload):
             results.append({"cid": cid, "email_status": status, "error": err})
 
         write_email_log(log)
+        if send_email:
+            _com_teardown()  # release Outlook + COM for this request thread
 
     ok_emails = sum(1 for r in results if r["email_status"] in ("sent", "draft"))
     failed = [r for r in results if r["email_status"] == "failed"]
@@ -523,6 +631,7 @@ def action_resend(payload):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         outlook_broken = None
         results = []
+        _com_init()  # initialise COM on this request thread before sending
         for cid in cids:
             led = ledger.get(cid, {})
             row = log.get(cid, {})
@@ -542,7 +651,7 @@ def action_resend(payload):
                     emailed_at = now
                 except Exception as e:
                     err = str(e)
-                    if "outlook" in err.lower() or "dispatch" in err.lower() or "win32" in err.lower():
+                    if _is_outlook_down(e):
                         outlook_broken = err
             base = dict(row) if row else {
                 "cid": cid, "first_name": first, "delivery_email": email,
@@ -557,6 +666,7 @@ def action_resend(payload):
             log[cid] = base
             results.append({"cid": cid, "email_status": status, "error": err})
         write_email_log(log)
+        _com_teardown()  # release Outlook + COM for this request thread
     ok = sum(1 for r in results if r["email_status"] in ("sent", "draft"))
     fail = [r for r in results if r["email_status"] == "failed"]
     return {"ok": True, "emails_ok": ok, "emails_failed": len(fail), "failed": fail[:20]}

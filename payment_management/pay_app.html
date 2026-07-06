@@ -207,6 +207,9 @@ function renderCards(){
     ['Email failed', c.email_failed, c.email_failed? 'err':''],
     ['Confirmed', c.confirmed, ''],
   ];
+  // Rows in the email log with no matching paid flag in the tracker. Non-zero
+  // means the CSV log has drifted from the ground-truth xlsx and needs a look.
+  if(c.log_orphans){ cards.push(['Log rows to reconcile', c.log_orphans, 'err']); }
   document.getElementById('cards').innerHTML = cards.map(([l,n,cls])=>
     `<div class="stat"><div class="n" style="${cls==='err'&&n?'color:var(--err)':''}">${n??'—'}</div><div class="l">${l}</div></div>`).join('');
 }
